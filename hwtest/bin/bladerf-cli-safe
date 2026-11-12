@@ -1,0 +1,100 @@
+#!/bin/bash
+# bladeRF-cli with a safety filter: refuses anything that can write the
+# bladeRF's SPI flash (FX3 firmware, FPGA autoload image, calibration data) or
+# leave it in the FX3 bootloader, so that no test run can brick the device.
+# Loading an FPGA image into the FPGA (-l / "load fpga") is allowed: it is
+# volatile and gone after a power cycle.
+#
+# Checks command-line options (only an explicit allowlist, no combined short
+# options or abbreviated long ones), every command given with -e, and every
+# line of a script given with -s. Interactive mode is refused (it could not be
+# checked).
+. "$(dirname "$0")/../lib/common.sh"
+
+refuse() { echo "bladerf-cli-safe: REFUSED: $*" >&2; exit 97; }
+
+# Commands are matched by their first word, case-insensitively and with quotes
+# removed, including bladeRF-cli's short aliases (see cmd.c). Refused:
+#  - anything that writes or erases flash or jumps to the FX3 bootloader:
+#    erase (e), flash_restore (fr), flash_init_cal (fic), jump_to_boot (j),
+#    load fx3 (ld fx3); flash_image (fi) only builds a file, but is not needed;
+#  - things the harness has no business doing: poke (po), calibrate (cal),
+#    set trimdac, set biastee ... on, and run (a script we could not check);
+#  - recover (r) with arguments, which loads FX3 firmware into RAM in
+#    bootloader mode: reserved for recover.sh (HWTEST_ALLOW_RECOVER=1).
+check_cmd() {
+    local w1 w2 rest last IFS=$' \t\n'
+    read -r w1 w2 rest <<< "$(printf '%s' "$1" | tr -d "\"'" | tr '[:upper:]' '[:lower:]')"
+    last="${rest##* }"
+    case "$w1" in
+        ""|\#*)
+            return 0 ;;
+        erase|e|flash_restore|fr|flash_init_cal|fic|jump_to_boot|j|flash_image|fi|\
+        poke|po|calibrate|cal|run)
+            refuse "command \"$1\" is not allowed in the harness" ;;
+        load|ld)
+            [ "$w2" = "fpga" ] || refuse "command \"$1\": only \"load fpga <file>\" is allowed" ;;
+        recover|r)
+            if [ -n "$w2" ] && [ "${HWTEST_ALLOW_RECOVER:-0}" != 1 ]; then
+                refuse "\"$1\": FX3 RAM recovery is reserved for recover.sh"
+            fi ;;
+        set|s)
+            case "$w2" in
+                trimdac) refuse "command \"$1\" changes the VCTCXO trim" ;;
+                biastee)
+                    case "$last" in
+                        off|0|false|disable) ;;
+                        *) refuse "command \"$1\": bias-tees stay off" ;;
+                    esac ;;
+            esac ;;
+    esac
+    return 0
+}
+
+check_cmds() {    # check each ';'-separated part (conservative either way)
+    local -a parts
+    local c
+    IFS=';' read -ra parts <<< "$1"
+    for c in "${parts[@]}"; do check_cmd "$c"; done
+}
+
+args=("$@")
+n=${#args[@]}
+interactive=1
+for ((i = 0; i < n; i++)); do
+    a="${args[$i]}"
+    case "$a" in
+        -f*|-L*|--fl*)
+            # also catches getopt_long abbreviations such as --flash-fi
+            refuse "option $a writes the device's flash" ;;
+        -i|--interactive)
+            refuse "interactive mode cannot be checked; use -e or -s" ;;
+        -e|--exec)
+            i=$((i + 1)); check_cmds "${args[$i]:-}"; interactive=0 ;;
+        --exec=*)
+            check_cmds "${a#--exec=}"; interactive=0 ;;
+        -s|--script)
+            i=$((i + 1)); f="${args[$i]:-}"
+            [ -f "$f" ] || refuse "script $f not found"
+            while IFS= read -r line || [ -n "$line" ]; do check_cmds "$line"; done < "$f"
+            interactive=0 ;;
+        --script=*)
+            f="${a#--script=}"
+            [ -f "$f" ] || refuse "script $f not found"
+            while IFS= read -r line || [ -n "$line" ]; do check_cmds "$line"; done < "$f"
+            interactive=0 ;;
+        -l|--load-fpga)
+            i=$((i + 1)); interactive=0 ;;
+        -d|--device|-v|--verbosity)
+            i=$((i + 1)) ;;
+        -p|--probe|--version|-h|--help|--help-interactive|--lib-version)
+            interactive=0 ;;
+        -*)
+            refuse "option $a is not on the allowed list" ;;
+        *)
+            refuse "unexpected argument $a" ;;
+    esac
+done
+[ "$interactive" -eq 0 ] || refuse "no -e/-s/-l/-p given (would start interactive mode)"
+
+exec "$BLADERF_CLI_BIN" "$@"
