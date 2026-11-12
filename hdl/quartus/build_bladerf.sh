@@ -314,6 +314,8 @@ if [ "$rev" == "" ]; then
 fi
 
 for plat in ../fpga/platforms/*/build/platform.conf ; do
+    # Optional setting: don't inherit it from a previously sourced platform
+    unset PLATFORM_CPUS
     source $plat
     if [ $board == "$BOARD_NAME" ]; then
         platform=$(basename $(dirname $(dirname $plat)))
