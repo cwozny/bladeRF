@@ -682,6 +682,21 @@ if [[ ${flow} == "full" ]]; then
     fi
     RBF=$BUILD_NAME.rbf
 
+    if [ ! -f "${work_dir}/output_files/$rev.rbf" ]; then
+        echo -e "\nError: Quartus did not create ${work_dir}/output_files/$rev.rbf" >&2
+        if grep -q "Unlicensed IP" "${work_dir}/output_files/$rev.asm.rpt" 2>/dev/null; then
+            echo "The Assembler needs a license for an IP core in the design:" >&2
+            grep "Unlicensed IP" "${work_dir}/output_files/$rev.asm.rpt" >&2
+            if [ "$cpu" == "niosv" ]; then
+                echo "Some Quartus versions, such as 23.1.1, need the no-cost Nios V/m" \
+                     "license from Altera's Self-Service Licensing Center for" \
+                     "programming files (point LM_LICENSE_FILE to it)." >&2
+            fi
+        fi
+        echo "" >&2
+        exit 1
+    fi
+
     mkdir -p "$BUILD_OUTPUT_DIR"
     cp "${work_dir}/output_files/$rev.rbf" "$BUILD_OUTPUT_DIR/$RBF"
 
