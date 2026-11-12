@@ -22,10 +22,39 @@ if(NOT BSP_DIR)
 endif()
 get_filename_component(BSP_DIR "${BSP_DIR}" ABSOLUTE)
 
+# C library. newlib-nano is the counterpart of the Nios II "small C library"
+# (hal.enable_small_c_library): with the full newlib the firmware is about
+# 60 KB too big for the on-chip RAM. newlib-nano's headers differ from the
+# full newlib's (struct _reent), so the BSP, libad936x and the firmware are
+# all compiled with nano.specs, not only linked with it (at link time it turns
+# -lc and -lm into -lc_nano and -lm_nano). picolibc is set up by the BSP
+# instead (hal.linker.use_picolibc, see build_bladerf.sh).
+set(NIOSV_LIBC "newlib-nano" CACHE STRING "C library: newlib-nano or picolibc")
+set_property(CACHE NIOSV_LIBC PROPERTY STRINGS newlib-nano picolibc)
+if(NIOSV_LIBC STREQUAL "newlib-nano")
+    add_compile_options(--specs=nano.specs)
+    add_link_options(--specs=nano.specs)
+elseif(NOT NIOSV_LIBC STREQUAL "picolibc")
+    message(FATAL_ERROR "NIOSV_LIBC must be newlib-nano or picolibc, not ${NIOSV_LIBC}")
+endif()
+
+# Leave out unused functions and data (much of the AD9361 driver's API and
+# unused parts of the HAL and C library): about 33 KB of the RAM is then left
+# for the stack and heap instead of about 10 KB.
+add_compile_options(-ffunction-sections -fdata-sections)
+add_link_options(-Wl,--gc-sections)
+
 # Same structure as the CMakeLists.txt that niosv-app generates: the BSP
 # provides the hal2_bsp library, toolchain settings and linker script.
 add_subdirectory(${BSP_DIR} bladeRF_nios_bsp)
 include(${BSP_DIR}/toolchain.cmake)
+
+# Treat the BSP headers as system headers, like any vendor SDK's: the firmware
+# is built with -Wextra -Werror, which the HAL headers of Quartus 25.1 do not
+# pass (intel_niosv.h: "type qualifiers ignored on function return type").
+get_target_property(_bsp_includes ${BspLibraryName} INTERFACE_INCLUDE_DIRECTORIES)
+set_property(TARGET ${BspLibraryName} APPEND PROPERTY
+             INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_bsp_includes})
 
 project(bladeRF_nios C ASM)
 

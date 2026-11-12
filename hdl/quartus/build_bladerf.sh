@@ -93,7 +93,7 @@ function usage()
     echo "Nios V environment variables:"
     echo "    NIOSV_TOOLCHAIN_PREFIX  RISC-V GCC prefix (default: riscv32-unknown-elf-,"
     echo "                            the RiscFree toolchain installed with Quartus)"
-    echo "    NIOSV_LIBC              C library: newlib (default) or picolibc"
+    echo "    NIOSV_LIBC              C library: newlib-nano (default) or picolibc"
     echo "    NIOSV_BUS               Nios V manager interfaces: avalon (default where"
     echo "                            supported) or axi4lite"
     echo ""
@@ -443,9 +443,9 @@ else
     export PATH
 
     niosv_prefix="${NIOSV_TOOLCHAIN_PREFIX:-riscv32-unknown-elf-}"
-    niosv_libc="${NIOSV_LIBC:-newlib}"
-    if [ "$niosv_libc" != "newlib" ] && [ "$niosv_libc" != "picolibc" ]; then
-        echo -e "\nError: invalid NIOSV_LIBC: ${niosv_libc} (expected newlib or picolibc)\n" >&2
+    niosv_libc="${NIOSV_LIBC:-newlib-nano}"
+    if [ "$niosv_libc" != "newlib-nano" ] && [ "$niosv_libc" != "picolibc" ]; then
+        echo -e "\nError: invalid NIOSV_LIBC: ${niosv_libc} (expected newlib-nano or picolibc)\n" >&2
         exit 1
     fi
 
@@ -586,7 +586,8 @@ if [ "$cpu" == "niosv" ]; then
               -B ${app} \
               -G "Unix Makefiles" \
               -DCMAKE_BUILD_TYPE=Release \
-              -DBSP_DIR="$(pwd)/bladeRF_nios_bsp"
+              -DBSP_DIR="$(pwd)/bladeRF_nios_bsp" \
+              -DNIOSV_LIBC="${niosv_libc}"
         cmake --build ${app} -j "$(nproc 2>/dev/null || echo 4)"
     done
 else
