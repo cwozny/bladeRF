@@ -81,7 +81,10 @@ and from then on libbladeRF reads each reply as the answer to its next request
 (it never checks a reply's address): the bandwidth read gets a status word (3).
 With the Nios V image the longest wait for a reply was 242 ms, just inside the
 time-out. `bin/bw-diag.sh <image labels>` reproduces it with every Nios packet
-logged and timed (LD_PRELOAD shim `lib/nios-trace.c`).
+logged and timed (LD_PRELOAD shim `lib/nios-trace.c`). `lib/late-reply.c`
+(LD_PRELOAD) reproduces it deterministically by delaying every Nth RFIC
+status response, e.g. `LATE_REPLY_EVERY=20` with `test_ctrl -T fpga -t
+bandwidth -f`: 17 failures without the fix on branch `fixes`, none with it.
 
 Two fixes to `test_scheduled_retune`, which failed with the official image
 too ("Requested timestamp is in the past"): it read the start timestamp
