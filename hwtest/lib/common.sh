@@ -55,8 +55,10 @@ require_no_tx_guard() {     # no-TX mode: stop unless the guard is active
     "$NO_TX_SELFTEST" > /dev/null 2>&1 || die "no-TX guard is not active"
 }
 
-# bladeRF-cli through the safety filter (see bin/bladerf-cli-safe)
-bcli() { "$HWTEST_DIR/bin/bladerf-cli-safe" "$@"; }
+# bladeRF-cli through the safety filter (see bin/bladerf-cli-safe). BCLI is
+# for commands such as timeout that cannot run shell functions.
+BCLI="$HWTEST_DIR/bin/bladerf-cli-safe"
+bcli() { "$BCLI" "$@"; }
 
 usb_present() {     # usb_present <vid:pid>
     lsusb -d "$1" > /dev/null 2>&1
