@@ -121,6 +121,14 @@ logged and timed (LD_PRELOAD shim `lib/nios-trace.c`). `lib/late-reply.c`
 (LD_PRELOAD) reproduces it deterministically by delaying every Nth RFIC
 status response, e.g. `LATE_REPLY_EVERY=20` with `test_ctrl -T fpga -t
 bandwidth -f`: 17 failures without the fix on branch `fixes`, none with it.
+On the hardware, with the fix the full bandwidth sweep passed with all
+three images (2026-11-13, `HWTEST_TX=1` runs `*-tx-fixes`), and it is no
+slower: traced back to back with the Nios V image, 370 s without the fix and
+377 s with it, with the same distribution of call times. The sweep's
+duration depends on how it starts: 270-305 s in the overnight deep runs,
+where it follows the frequency sweep, but 370-415 s whenever it started
+right after an image load, with either libbladeRF build. Compare its time
+only between runs that start the same way.
 
 Two fixes to `test_scheduled_retune`, which failed with the official image
 too ("Requested timestamp is in the past"): it read the start timestamp
