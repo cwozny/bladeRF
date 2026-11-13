@@ -6,8 +6,11 @@ bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
 ## Safety rules
 
 * The harness **never writes the bladeRF's SPI flash**. FPGA images are only
-  loaded into the FPGA (volatile; the xA5 image does not even fit in the
-  flash), so a power cycle always returns the board to a clean state.
+  loaded into the FPGA (volatile), so as long as the flash holds no FPGA
+  autoload image (inventory.sh shows the FPGA unconfigured after power-up), a
+  power cycle always returns the board to a clean state. The xA5 image fits
+  in a 64 Mbit flash, so do not set up FPGA autoload (`bladeRF-cli -L`) on the
+  test board.
 * All bladeRF-cli use goes through `bin/bladerf-cli-safe`, which refuses
   flash-writing commands and options (`flash_image`, `flash_restore`,
   `flash_init_cal`, `erase`, `jump_to_boot`, `load fx3`, `-f`, `-L`, ...)

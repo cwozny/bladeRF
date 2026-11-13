@@ -23,8 +23,14 @@ bcli -p
 bcli -e "version" -e "info"
 
 log "Full flash backup (read-only)"
-bcli -e "flash_backup $out/flash_backup_full.bin 0 0x400000" ||
-    bcli -e "flash_backup $out/flash_backup_full.bin"
+# The flash size differs between boards (e.g. 64 Mbit W25Q64 on a recent xA5)
+size=$("$HOST_BUILD/output/libbladeRF_test_flash_id" 2>/dev/null |
+       awk '/Total size:/ {print $3; exit}')
+case "$size" in
+    ''|*[!0-9]*) die "could not read the flash size (libbladeRF_test_flash_id)" ;;
+esac
+log "flash size: $size bytes"
+bcli -e "flash_backup $out/flash_backup_full.bin 0 $(printf '0x%x' "$size")"
 for t in cal fw; do     # the full backup also covers the FPGA autoload region
     bcli -e "flash_backup $out/flash_backup_$t.bin $t" || log "flash_backup $t failed"
 done
