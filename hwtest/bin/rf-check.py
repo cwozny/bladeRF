@@ -5,10 +5,15 @@
   rf-check.py rx  [--out results.jsonl]   B200mini TX -> bladeRF RX
   rf-check.py all [--out results.jsonl]
 
-Expected cabling (fixed for the whole campaign, >= 30 dB between any TX and
-RX, no antennas):
-  bladeRF TX2 -> 30 dB -> B200mini "RX2" port (UHD's default RX antenna)
-  B200mini "TX/RX" port -> 30 dB -> bladeRF RX2
+Expected cabling (fixed for the whole campaign, no antennas; see README.md):
+  bladeRF TX2 -> >= 20 dB -> B200mini "RX2" port (UHD's default RX antenna)
+  B200mini "TX/RX" port -> >= 20 dB -> bladeRF RX2
+Transmit power is capped so that no receiver sees more than -20 dBm: the
+bladeRF by lib/tx-cap.c (preloaded with HWTEST_TX=1), the B200mini here
+(B200_TX_GAIN_MAX).
+
+A capture fails, and is retried, if the B200mini drops samples (RX overflow,
+TX underflow).
 
 For each frequency/sample-rate point one side transmits a CW tone at a known
 offset from the tuned frequency and the other side measures it: frequency
@@ -47,10 +52,12 @@ POINTS = [
 ]
 
 BLADERF_CH = 2          # bladeRF RX2/TX2 face the B200mini
-BLADERF_TX_GAIN = 0     # dB; modest output, the attenuator does the rest
+BLADERF_TX_GAIN = 30    # dB overall (60 ~= 0 dBm): about -30 dBm
 BLADERF_RX_GAIN = 30    # dB, manual gain
-B200_TX_GAIN = 50       # dB
+B200_TX_GAIN = 50       # dB of 89.75 (~+10 dBm at full gain): about -30 dBm
+B200_TX_GAIN_MAX = 65   # never more: <= ~-15 dBm out, -35 dBm after 20 dB
 B200_RX_GAIN = 30       # dB
+TRIES = 3               # captures per point before giving up on dropped samples
 
 
 def run_cli(cmds, timeout=60):
@@ -108,7 +115,73 @@ def analyze(x, fs, f_off):
 
 def usrp():
     import uhd
+    assert B200_TX_GAIN <= B200_TX_GAIN_MAX
     return uhd.usrp.MultiUSRP("type=b200")
+
+
+def b200_set_tx_gain(u, gain):
+    """Set the B200mini's TX gain, never above B200_TX_GAIN_MAX."""
+    if gain > B200_TX_GAIN_MAX:
+        raise ValueError("B200mini TX gain %g above the cap" % gain)
+    u.set_tx_gain(gain, 0)
+    if u.get_tx_gain(0) > B200_TX_GAIN_MAX:
+        u.set_tx_gain(0, 0)
+        raise RuntimeError("B200mini TX gain did not stay under the cap")
+
+
+def b200_capture(u, n, fc, fs, gain):
+    """Receive n samples with the B200mini; fails on any dropped samples."""
+    import uhd
+    u.set_rx_rate(fs, 0)
+    u.set_rx_freq(uhd.types.TuneRequest(fc), 0)
+    u.set_rx_gain(gain, 0)
+    st = u.get_rx_stream(uhd.usrp.StreamArgs("fc32", "sc16"))
+    md = uhd.types.RXMetadata()
+    buf = np.zeros((1, st.get_max_num_samps()), dtype=np.complex64)
+    out = np.empty(n, dtype=np.complex64)
+    errors = []
+    cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
+    cmd.stream_now = True
+    st.issue_stream_cmd(cmd)
+    got = 0
+    while got < n:
+        k = st.recv(buf, md, 1.0)
+        if md.error_code != uhd.types.RXMetadataErrorCode.none:
+            errors.append(md.strerror())
+            if md.error_code == uhd.types.RXMetadataErrorCode.timeout:
+                break
+        k = min(k, n - got)
+        out[got:got + k] = buf[0, :k]
+        got += k
+    st.issue_stream_cmd(uhd.types.StreamCMD(uhd.types.StreamMode.stop_cont))
+    while st.recv(buf, md, 0.1):
+        pass
+    if errors or got < n:
+        raise RuntimeError("B200mini RX dropped samples: %s" % "; ".join(errors[:3]))
+    return out
+
+
+def b200_transmit(u, proto, fc, fs, gain, stop, result):
+    """Transmit proto repeatedly until stop is set; counts underflows."""
+    import uhd
+    u.set_tx_rate(fs, 0)
+    u.set_tx_freq(uhd.types.TuneRequest(fc), 0)
+    b200_set_tx_gain(u, gain)
+    st = u.get_tx_stream(uhd.usrp.StreamArgs("fc32", "sc16"))
+    md = uhd.types.TXMetadata()
+    amd = uhd.types.TXAsyncMetadata()
+    buf = np.tile(proto, int(np.ceil(st.get_max_num_samps() * 8 / len(proto))))
+    buf = buf.reshape(1, -1).astype(np.complex64)
+    result["underflows"] = []
+    t0 = time.time()
+    while not stop.is_set():
+        st.send(buf, md)
+        while st.recv_async_msg(amd, 0.0):
+            if amd.event_code in (uhd.types.TXMetadataEventCode.underflow,
+                                  uhd.types.TXMetadataEventCode.underflow_in_packet):
+                result["underflows"].append(time.time() - t0)
+    md.end_of_burst = True
+    st.send(np.zeros((1, 1), dtype=np.complex64), md)
 
 
 def check_tx(u, point):
@@ -131,8 +204,10 @@ def check_tx(u, point):
         t = threading.Thread(target=lambda: result.update(out=run_cli(cmds)))
         t.start()
         time.sleep(2.0)   # bladeRF tuned and streaming
-        rx = u.recv_num_samps(int(fs * 0.05), fc, fs, [0], B200_RX_GAIN)[0]
-        t.join()
+        try:
+            rx = b200_capture(u, int(fs * 0.05), fc, fs, B200_RX_GAIN)
+        finally:
+            t.join()
     m = analyze(rx, fs, f_off)
     m.update(direction="bladerf_tx", fc=fc, fs=fs, f_off=f_off)
     return m
@@ -144,28 +219,35 @@ def check_rx(u, point):
     n = int(fs * 0.05)
     proto = tone(int(fs * 0.01), fs, f_off, 0.5).astype(np.complex64)
     stop = threading.Event()
-
-    def b200_tx():
-        u.send_waveform(proto, 8.0, fc, fs, [0], B200_TX_GAIN)
-
-    t = threading.Thread(target=b200_tx)
+    txr = {}
+    t = threading.Thread(target=b200_transmit,
+                         args=(u, proto, fc, fs, B200_TX_GAIN, stop, txr))
     t.start()
     time.sleep(1.5)
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "rx.bin")
-        run_cli([
-            "set frequency rx%d %d" % (BLADERF_CH, fc),
-            "set samplerate rx%d %d" % (BLADERF_CH, fs),
-            "set bandwidth rx%d %d" % (BLADERF_CH, min(fs, 56e6)),
-            "set agc off",
-            "set gain rx%d %d" % (BLADERF_CH, BLADERF_RX_GAIN),
-            "rx config file=%s format=bin n=%d channel=%d" % (path, n, BLADERF_CH),
-            "rx start",
-            "rx wait 10s",
-        ])
-        x = from_sc16q11(path)
-    t.join()
-    stop.set()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "rx.bin")
+            run_cli([
+                "set frequency rx%d %d" % (BLADERF_CH, fc),
+                "set samplerate rx%d %d" % (BLADERF_CH, fs),
+                "set bandwidth rx%d %d" % (BLADERF_CH, min(fs, 56e6)),
+                "set agc off",
+                "set gain rx%d %d" % (BLADERF_CH, BLADERF_RX_GAIN),
+                "rx config file=%s format=bin n=%d channel=%d" % (path, n, BLADERF_CH),
+                "rx start",
+                "rx wait 10s",
+            ])
+            x = from_sc16q11(path)
+    finally:
+        stop.set()
+        t.join()
+    # underflows in the first second are the stream starting up
+    late = [x for x in txr.get("underflows", []) if x > 1.0]
+    if "underflows" not in txr:
+        raise RuntimeError("B200mini transmit thread failed")
+    if late:
+        raise RuntimeError("B200mini TX underflowed %d times while the bladeRF "
+                           "was receiving" % len(late))
     m = analyze(x, fs, f_off)
     m.update(direction="bladerf_rx", fc=fc, fs=fs, f_off=f_off)
     return m
@@ -190,11 +272,19 @@ def main():
         for mode, fn in (("tx", check_tx), ("rx", check_rx)):
             if a.mode not in (mode, "all"):
                 continue
-            try:
-                m = fn(u, point)
-            except Exception as e:  # keep going; record the failure
-                m = {"direction": "bladerf_" + mode, "fc": point[0], "error": str(e)}
+            errors = []
+            for _ in range(TRIES):  # retry captures that dropped samples
+                try:
+                    m = fn(u, point)
+                    break
+                except Exception as e:  # keep going; record the failure
+                    errors.append(str(e))
+            else:
+                m = {"direction": "bladerf_" + mode, "fc": point[0], "error": errors[-1]}
                 fails += 1
+            m["retries"] = len(errors) if "error" not in m else TRIES - 1
+            if errors:
+                m["retry_errors"] = errors
             m["time"] = time.time()
             out.write(json.dumps(m) + "\n")
             out.flush()
