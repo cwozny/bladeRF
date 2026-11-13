@@ -179,6 +179,10 @@ def main():
     ap.add_argument("--points", type=int, default=len(POINTS),
                     help="only the first N frequency points")
     a = ap.parse_args()
+    if os.environ.get("HWTEST_TX") != "1":
+        # Both directions transmit (the bladeRF or the B200mini)
+        sys.exit("rf-check.py transmits: set HWTEST_TX=1 only with the cabling "
+                 "above (attenuators, no antennas)")
     u = usrp()
     out = sys.stdout if a.out == "-" else open(a.out, "a")
     fails = 0

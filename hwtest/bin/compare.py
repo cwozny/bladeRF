@@ -48,10 +48,23 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def tx_mode(d):
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            return bool(json.load(f).get("tx", True))   # older runs: TX mode
+    except (OSError, ValueError):
+        return None
+
+
 def compare(base, cand):
     flags = []
     tb, tc = tests(base), tests(cand)
     print("\n=== %s  vs  %s" % (base, cand))
+    if tx_mode(base) != tx_mode(cand):
+        # Receive-only runs leave out the TX tests: compare like with like
+        print("WARNING: TX mode differs (baseline tx=%s, candidate tx=%s)"
+              % (tx_mode(base), tx_mode(cand)))
+        flags.append(("meta", "TX-MODE-DIFFERS"))
     print("%-34s %10s %10s" % ("test", "baseline", "candidate"))
     for name in sorted(set(tb) | set(tc)):
         b, c = tb.get(name), tc.get(name)
