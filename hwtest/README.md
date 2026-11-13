@@ -63,6 +63,25 @@ harness does not run them that way:
   FPGA tuning mode, where the Nios starts from scratch after the reload.
 * The full test_ctrl sweeps in host tuning mode take over 1.5 hours per image
   (the sample rate sweep alone about 50 minutes).
+* `test_rx_meta -m` (both RX channels) in FPGA tuning mode: right after the
+  second RX channel is enabled, the stream jumps ("Sample discontinuity
+  detected"), overruns, and stops ("Transfer timed out for RX buffer", "RX
+  "now" failed: Operation timed out"). It passes in host tuning mode, where
+  the harness runs it.
+
+A real libbladeRF bug the deep phase hits with the Nios II images:
+test_ctrl's full bandwidth test in FPGA tuning mode fails now and then with
+"Unexpected bandwidth. requested=X, actual=3, readback=X". Many bandwidth
+changes keep the Nios II busy for 250-290 ms, longer than libbladeRF's 250 ms
+time-out for a Nios reply (PERIPHERAL_TIMEOUT_MS): ~1,300 status polls time
+out per run. Usually the Nios is still busy when the next poll arrives, and
+it sends one reply for both polls. But when it finishes in the ~0.2 ms between
+libbladeRF giving up on a poll and the next poll arriving, it answers both,
+and from then on libbladeRF reads each reply as the answer to its next request
+(it never checks a reply's address): the bandwidth read gets a status word (3).
+With the Nios V image the longest wait for a reply was 242 ms, just inside the
+time-out. `bin/bw-diag.sh <image labels>` reproduces it with every Nios packet
+logged and timed (LD_PRELOAD shim `lib/nios-trace.c`).
 
 Two fixes to `test_scheduled_retune`, which failed with the official image
 too ("Requested timestamp is in the past"): it read the start timestamp
@@ -82,6 +101,12 @@ board after each.
     bladeRF TX2  -> 30 dB -> B200mini RX2       bladeRF TX measured by the USRP
     B200mini TX/RX -> 30 dB -> bladeRF RX2      USRP tone measured by the bladeRF
 
+At least 30 dB per link and no antennas anywhere: that keeps every receiver
+at or below -15 dBm (Ettus's limit for the B200mini's RF inputs) even with a
+transmitter at full power (bladeRF 2.0 micro +8 dBm, B200mini about +10 dBm).
+One 20 dB pad is not enough; two in series (40 dB) are. Nothing measures the
+TX1 -> RX1 loop yet, so a 50 ohm load on TX1 will do instead.
+
 ## Scripts
 
 | Script | What it does |
@@ -94,3 +119,5 @@ board after each.
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
 | `bin/compare.py` | Compares result directories and flags regressions |
+| `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
+| `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |

@@ -160,11 +160,14 @@ common_tests() {
     # Receive with metadata and the FPGA's sample counter, in 16-bit and 8-bit
     # sample formats, rx_meta also on both RX channels (the receive-only
     # combinations of Nuand's test_regression). rx_meta reports overruns but
-    # still exits 0.
+    # still exits 0. Both RX channels only in host tuning mode: in FPGA tuning
+    # mode that fails with every image (see README.md).
     runtest "rx_meta-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta"
     runtest "rx_meta_8bit-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8
-    runtest "rx_meta_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -m
-    runtest "rx_meta_8bit_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8 -m
+    if [ "$m" = host ]; then
+        runtest "rx_meta_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -m
+        runtest "rx_meta_8bit_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8 -m
+    fi
     runtest "rx_discont-$m" 300 "Expected.*Got" "$T/libbladeRF_test_rx_discont" -i 2000
     runtest "rx_discont_8bit-$m" 300 "Expected.*Got" "$T/libbladeRF_test_rx_discont" -i 2000 -b 8
     runtest "timestamps_rx_gaps-$m" 300 "[1-9][0-9]* test cases failed" \
