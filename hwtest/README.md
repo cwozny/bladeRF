@@ -64,10 +64,13 @@ harness does not run them that way:
 * The full test_ctrl sweeps in host tuning mode take over 1.5 hours per image
   (the sample rate sweep alone about 50 minutes).
 
-`test_scheduled_retune` used to read the start timestamp before the initial
-full tune, which can take longer (~60 ms) than its 20 ms start-up delay on a
-bladeRF 2.0 micro, so its first sync call failed with "Requested timestamp is
-in the past"; it now tunes first.
+Two fixes to `test_scheduled_retune`, which failed with the official image
+too ("Requested timestamp is in the past"): it read the start timestamp
+before the initial full tune, which can take longer (~60 ms) than its 20 ms
+start-up delay, so it now tunes first; and with 16 RX buffers (8 in flight)
+at 5 Msps the sync worker overran every few hundred iterations, so it now
+uses 64. (libbladeRF has started RX streaming at `bladerf_enable_module`
+since 712d49e2, so a few overruns at start-up are normal.)
 
 `campaign.sh <plan>` runs a list of run-suite.sh runs unattended, one per
 line (`<image.rbf> <label> [phase...] [SOAK_MINUTES=<n>]`), recovering the
