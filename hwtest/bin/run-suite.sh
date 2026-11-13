@@ -27,6 +27,12 @@
 # with RX retunes scheduled on timestamps (test_scheduled_retune), which also
 # runs in TX mode.
 #
+# Environment: HOST_BUILD selects the libbladeRF build under test (default
+# $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
+# out (logged, not in summary.jsonl); HWTEST_FPGA_MIMO=1 also runs rx_meta on
+# both RX channels in FPGA tuning mode, which needs a libbladeRF that enables
+# both channels of a MIMO layout in that mode (branch fixes; see README.md).
+#
 # Results: $RESULTS_DIR/<label>/<time>/ with one log per test, summary.jsonl
 # ({"test", "rc", "seconds"}), rf.jsonl and meta.json. Compare runs with
 # compare.py. Only test programs on the allowlist below are ever run; the two
@@ -35,7 +41,7 @@
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
-[ $# -ge 2 ] || { sed -n '2,34p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,40p' "$0"; exit 2; }
 image=$(readlink -f "$1"); label=$2; shift 2
 phases=("$@"); [ ${#phases[@]} -gt 0 ] || phases=(smoke host fpga rf)
 [ -f "$image" ] || die "no such image: $image"
@@ -62,7 +68,8 @@ cat > "$out/meta.json" <<EOF
 {"label": "$label", "image": "$image", "image_md5": "$(md5_of "$image")",
  "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false),
  "start": "$(date -Is)", "host": "$(hostname)",
- "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)"}
+ "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)",
+ "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fpga_mimo": "${HWTEST_FPGA_MIMO:-0}"}
 EOF
 
 # Output checkers for tests whose exit status does not reflect data errors
@@ -82,6 +89,10 @@ check_iq_matches() {    # needs "IQ Matches: X / Y" lines, all with X == Y
 runtest() {
     local name=$1 tmo=$2 re=$3; shift 3
     local log="$out/logs/$name.log" t0=$SECONDS rc
+    if [[ ",${HWTEST_SKIP:-}," == *",$name,"* ]]; then
+        log "--- $name: skipped (HWTEST_SKIP)"
+        return 0
+    fi
     log "--- $name: $*"
     timeout --kill-after=10 "$tmo" "$@" > "$log" 2>&1
     rc=$?
@@ -172,11 +183,12 @@ common_tests() {
     # Receive with metadata and the FPGA's sample counter, in 16-bit and 8-bit
     # sample formats, rx_meta also on both RX channels (the receive-only
     # combinations of Nuand's test_regression). rx_meta reports overruns but
-    # still exits 0. Both RX channels only in host tuning mode: in FPGA tuning
-    # mode that fails with every image (see README.md).
+    # still exits 0. Both RX channels only in host tuning mode unless
+    # HWTEST_FPGA_MIMO=1: with Nuand's libbladeRF that fails in FPGA tuning
+    # mode with every image (see README.md).
     runtest "rx_meta-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta"
     runtest "rx_meta_8bit-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8
-    if [ "$m" = host ]; then
+    if [ "$m" = host ] || [ "${HWTEST_FPGA_MIMO:-0}" = 1 ]; then
         runtest "rx_meta_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -m
         runtest "rx_meta_8bit_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8 -m
     fi

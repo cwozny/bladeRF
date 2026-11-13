@@ -51,6 +51,11 @@ frequency, bandwidth and sample rate sweeps with the AD9361 driver on the
 Nios (FPGA tuning mode), about an hour with the official image; the soak
 phase repeats a mixed workload for `SOAK_MINUTES`.
 
+Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
+(the libbladeRF build under test, default `host-build`), `HWTEST_SKIP=<test>,...`
+(left out, logged), `HWTEST_FPGA_MIMO=1` (two-channel receive in FPGA tuning
+mode too; needs branch `fixes`, see below) and `SOAK_MINUTES`.
+
 Things that fail with every image, including the official one, so the
 harness does not run them that way:
 
@@ -67,7 +72,24 @@ harness does not run them that way:
   second RX channel is enabled, the stream jumps ("Sample discontinuity
   detected"), overruns, and stops ("Transfer timed out for RX buffer", "RX
   "now" failed: Operation timed out"). It passes in host tuning mode, where
-  the harness runs it.
+  the harness runs it. In FPGA tuning mode libbladeRF enables the two RX
+  channels one at a time, and enabling the second resets the receive path
+  under the running stream; host tuning mode enables both at once. Branch
+  `fixes` does the same in FPGA tuning mode, and then it passes
+  (`HWTEST_FPGA_MIMO=1`).
+* test_ctrl's `threads` case in host tuning mode: test_ctrl refuses it on
+  the bladeRF 2.0 (Nuand issue #705). The harness runs it in FPGA tuning
+  mode only, but there it failed both times with the official image
+  ("Erroneous overall gain readback", then RX/TX transfer time-outs until it
+  was killed), and the second time the bladeRF dropped off USB 25 s in and
+  only came back when it was unplugged and plugged in again. Unattended
+  campaigns leave it out (`HWTEST_SKIP=ctrl_threads-fpga`).
+
+`test_rx_meta`'s two-channel variants overrun now and then, in either tuning
+mode and with either libbladeRF build (9 of 180 runs, one in 20): it streams
+4 Msps through 16 buffers of 4096 samples, about 16 ms, so a host stall
+longer than that overruns ("Overrun detected", or in its scheduled part
+"Requested timestamp is in the past"). run-suite.sh counts that as a failure.
 
 A real libbladeRF bug the deep phase hits with the Nios II images:
 test_ctrl's full bandwidth test in FPGA tuning mode fails now and then with
@@ -95,8 +117,9 @@ uses 64. (libbladeRF has started RX streaming at `bladerf_enable_module`
 since 712d49e2, so a few overruns at start-up are normal.)
 
 `campaign.sh <plan>` runs a list of run-suite.sh runs unattended, one per
-line (`<image.rbf> <label> [phase...] [SOAK_MINUTES=<n>]`), recovering the
-board after each.
+line (`<image.rbf> <label> [phase...] [VAR=<value>...]` with the settings
+above), recovering the board after each. A failed test that leaves the bladeRF
+off USB ends the run and the campaign: only a replug brings it back.
 
 ## Cabling for TX runs (`HWTEST_TX=1`)
 
