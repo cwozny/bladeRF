@@ -11,6 +11,7 @@ tolerances below. Exit status 1 if anything is flagged.
 """
 import json
 import os
+import re
 import sys
 
 # RF tolerances (candidate minus baseline). The two images run on the same
@@ -32,8 +33,26 @@ def load_jsonl(path):
         return [json.loads(l) for l in f if l.strip()]
 
 
+SOAK_RE = re.compile(r"^soak-\d+-(.+)$")
+
+
 def tests(d):
-    return {t["test"]: t for t in load_jsonl(os.path.join(d, "summary.jsonl"))}
+    """Non-soak tests by name, and soak tests grouped by kind (the name
+    without its iteration number, e.g. "stream-host")."""
+    single, soak = {}, {}
+    for t in load_jsonl(os.path.join(d, "summary.jsonl")):
+        m = SOAK_RE.match(t["test"])
+        if m:
+            soak.setdefault(m.group(1), []).append(t)
+        else:
+            single[t["test"]] = t
+    return single, soak
+
+
+def soak_stats(rows):
+    secs = [r["seconds"] for r in rows]
+    return {"n": len(rows), "failed": sum(1 for r in rows if r["rc"] != 0),
+            "mean": sum(secs) / len(secs), "max": max(secs)}
 
 
 def rf(d):
@@ -58,7 +77,7 @@ def tx_mode(d):
 
 def compare(base, cand):
     flags = []
-    tb, tc = tests(base), tests(cand)
+    (tb, sb), (tc, sc) = tests(base), tests(cand)
     print("\n=== %s  vs  %s" % (base, cand))
     if tx_mode(base) != tx_mode(cand):
         # Receive-only runs leave out the TX tests: compare like with like
@@ -81,6 +100,23 @@ def compare(base, cand):
         if note:
             flags.append((name, note))
         print("%-34s %10s %10s  %s" % (name, bs, cs, note))
+
+    if sb or sc:
+        print("\n%-34s %18s %18s" % ("soak (runs, failed, mean/max s)", "baseline", "candidate"))
+    for kind in sorted(set(sb) | set(sc)):
+        b = soak_stats(sb[kind]) if kind in sb else None
+        c = soak_stats(sc[kind]) if kind in sc else None
+        fmt = lambda x: ("%d, %d, %.0f/%.0f" % (x["n"], x["failed"], x["mean"], x["max"])) if x else "-"
+        note = ""
+        if c and c["failed"] and (not b or not b["failed"]):
+            note = "SOAK-FAILURES"
+        elif b and c and c["mean"] > 2 and c["mean"] > SLOWER * max(b["mean"], 0.1):
+            note = "SLOWER"
+        elif b and not c:
+            note = "MISSING"
+        if note:
+            flags.append(("soak " + kind, note))
+        print("%-34s %18s %18s  %s" % (kind, fmt(b), fmt(c), note))
 
     rb, rc = rf(base), rf(cand)
     if rb or rc:

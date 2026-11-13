@@ -11,6 +11,9 @@
 #   fpga   the same with AD9361 control running on the Nios
 #          (BLADERF_DEFAULT_TUNING_MODE=fpga): exercises the AD9361 driver
 #          in the firmware
+#   deep   test_ctrl's full frequency, bandwidth and sample rate sweeps (the
+#          other phases run its -f variants) with AD9361 control on the
+#          Nios: ~1 hour with the official image
 #   rf     rf-check.py against the B200mini, in both tuning modes
 #          (transmits: only with HWTEST_TX=1)
 #   soak   repeats a short mixed workload for SOAK_MINUTES (default 90,
@@ -32,7 +35,7 @@
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
-[ $# -ge 2 ] || { sed -n '2,24p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,34p' "$0"; exit 2; }
 image=$(readlink -f "$1"); label=$2; shift 2
 phases=("$@"); [ ${#phases[@]} -gt 0 ] || phases=(smoke host fpga rf)
 [ -f "$image" ] || die "no such image: $image"
@@ -120,21 +123,30 @@ scheduled_retune_rx() {     # scheduled_retune_rx <test name>
     return $rc
 }
 
-# test_ctrl cases that do not enable a TX channel (all but enable_module and
-# threads; xb200 needs an XB-200)
-CTRL_RX_CASES="sampling lpf_mode loopback rx_mux correction samplerate bandwidth gain frequency"
+# test_ctrl cases, run one by one with -f (its quick variants; the deep phase
+# runs the full frequency, bandwidth and sample rate sweeps). In receive-only
+# mode enable_module and threads are left out (they enable TX channels);
+# xb200 needs an XB-200. loopback only runs in host tuning mode: it sets the
+# RFIC BIST loopback, which libbladeRF only supports in host tuning mode.
+ctrl_cases() {      # ctrl_cases <tuning mode>
+    local c
+    for c in sampling lpf_mode enable_module loopback rx_mux correction \
+             samplerate bandwidth gain frequency threads; do
+        case "$c" in
+            enable_module|threads) tx_ok || continue ;;
+            loopback) [ "$1" = host ] || continue ;;
+        esac
+        echo "$c"
+    done
+}
+CTRL_FAIL_RE="FAILED|Failed|failure|Invalid test"
 
 # Tests that pass in either tuning mode. Fail regexes from each test's output.
 common_tests() {
     local m=$1 c
-    if tx_ok; then
-        runtest "ctrl-$m" 900 "FAILED|Failed|failure" "$T/libbladeRF_test_ctrl" -T "$m"
-    else
-        for c in $CTRL_RX_CASES; do
-            runtest "ctrl_$c-$m" 600 "FAILED|Failed|failure|Invalid test" \
-                "$T/libbladeRF_test_ctrl" -T "$m" -t "$c"
-        done
-    fi
+    for c in $(ctrl_cases "$m"); do
+        runtest "ctrl_$c-$m" 600 "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T "$m" -t "$c" -f
+    done
     runtest "open-$m" 300 - "$T/libbladeRF_test_open" -c 25
     if tx_ok; then
         runtest "quick_retune-$m" 300 - "$T/libbladeRF_test_quick_retune" -i 200
@@ -177,7 +189,9 @@ for phase in "${phases[@]}"; do
             runtest digital_loopback_rfic-host 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l rfic -c 100
         fi
         runtest tune_timing-host 600 - "$T/libbladeRF_test_tune_timing" -i 100
-        runtest fpga_load 300 - "$T/libbladeRF_test_fpga_load" -d "*" -f "$image"
+        # (fpga_load runs in the fpga phase: in host tuning mode it fails
+        # with every image, including the official one, because libbladeRF
+        # keeps its host-side AD9361 state across an FPGA reload)
         # Nios round-trip latency; writes AD9361 register 0x000 (volatile), so
         # reload the image afterwards
         runtest peripheral_timing 600 - "$T/libbladeRF_test_peripheral_timing"
@@ -189,6 +203,20 @@ for phase in "${phases[@]}"; do
         export BLADERF_DEFAULT_TUNING_MODE=fpga
         runtest tuning_mode-fpga 60 @check_tuning_fpga "$BCLI" -e "print tuning_mode"
         common_tests fpga
+        # Loads the image through libbladeRF on an open device, twice, and
+        # sets the sample rate through the Nios
+        runtest fpga_load 300 - "$T/libbladeRF_test_fpga_load" -d "*" -f "$image"
+        unset BLADERF_DEFAULT_TUNING_MODE
+        ;;
+    deep)
+        # With the official image: frequency ~8 min, bandwidth ~11 min,
+        # sample rate ~35 min. The time-outs only catch hangs.
+        load_image deep
+        export BLADERF_DEFAULT_TUNING_MODE=fpga
+        runtest tuning_mode-deep 60 @check_tuning_fpga "$BCLI" -e "print tuning_mode"
+        runtest ctrl_frequency_full-fpga 1800 "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T fpga -t frequency
+        runtest ctrl_bandwidth_full-fpga 2400 "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T fpga -t bandwidth
+        runtest ctrl_samplerate_full-fpga 6000 "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T fpga -t samplerate
         unset BLADERF_DEFAULT_TUNING_MODE
         ;;
     rf)
@@ -214,6 +242,8 @@ for phase in "${phases[@]}"; do
                 BLADERF_DEFAULT_TUNING_MODE=$m runtest "soak-$i-retune-$m" 300 - "$T/libbladeRF_test_quick_retune" -i 50
             fi
             BLADERF_DEFAULT_TUNING_MODE=$m scheduled_retune_rx "soak-$i-sched_retune_rx-$m"
+            BLADERF_DEFAULT_TUNING_MODE=$m runtest "soak-$i-ctrl_frequency-$m" 300 "$CTRL_FAIL_RE" \
+                "$T/libbladeRF_test_ctrl" -T "$m" -t frequency -f -s "$i"
             BLADERF_DEFAULT_TUNING_MODE=$m runtest "soak-$i-stream-$m" 300 - "$T/libbladeRF_test_repeated_stream" --rx -r 20
         done
         ;;
