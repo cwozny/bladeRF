@@ -98,6 +98,12 @@ runtest() {
     else
         log "    FAILED rc=$rc ($((SECONDS - t0)) s), see $log"
         tail -5 "$log" | sed 's/^/      /'
+        if ! usb_present "$BLADERF2_USB_ID" && ! usb_present "$FX3_BOOTLOADER_USB_ID"; then
+            # The board has dropped off USB (seen once, during ctrl_threads-fpga):
+            # nothing after this can pass, and only a replug brings it back.
+            log "bladeRF is no longer on USB; stopping. Replug it."
+            exit 2
+        fi
     fi
     return $rc
 }
@@ -129,12 +135,15 @@ scheduled_retune_rx() {     # scheduled_retune_rx <test name>
 # mode enable_module and threads are left out (they enable TX channels);
 # xb200 needs an XB-200. loopback only runs in host tuning mode: it sets the
 # RFIC BIST loopback, which libbladeRF only supports in host tuning mode.
+# threads only runs in FPGA tuning mode: test_ctrl itself refuses host tuning
+# mode on the bladeRF 2.0 ("bug #705").
 ctrl_cases() {      # ctrl_cases <tuning mode>
     local c
     for c in sampling lpf_mode enable_module loopback rx_mux correction \
              samplerate bandwidth gain frequency threads; do
         case "$c" in
-            enable_module|threads) tx_ok || continue ;;
+            enable_module) tx_ok || continue ;;
+            threads) tx_ok && [ "$1" = fpga ] || continue ;;
             loopback) [ "$1" = host ] || continue ;;
         esac
         echo "$c"
@@ -146,7 +155,9 @@ CTRL_FAIL_RE="FAILED|Failed|failure|Invalid test"
 common_tests() {
     local m=$1 c
     for c in $(ctrl_cases "$m"); do
-        runtest "ctrl_$c-$m" 600 "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T "$m" -t "$c" -f
+        # threads hung until the 600 s time-out when it failed
+        runtest "ctrl_$c-$m" "$([ "$c" = threads ] && echo 300 || echo 600)" \
+            "$CTRL_FAIL_RE" "$T/libbladeRF_test_ctrl" -T "$m" -t "$c" -f
     done
     runtest "open-$m" 300 - "$T/libbladeRF_test_open" -c 25
     if tx_ok; then
