@@ -40,5 +40,16 @@ if "$NO_TX_SELFTEST" > /dev/null 2>&1; then
 fi
 LD_PRELOAD="$NO_TX_GUARD" "$NO_TX_SELFTEST" || die "no-TX guard does not work"
 
+log "Building the TX power cap (HWTEST_TX=1 runs)"
+cc -shared -fPIC -O2 -Wall -Wextra -Werror -I"$inc" \
+    -o "$TX_CAP" "$HWTEST_DIR/lib/tx-cap.c" -ldl
+cc -O2 -Wall -Wextra -Werror -I"$inc" \
+    -o "$TX_CAP_TEST" "$HWTEST_DIR/lib/tx-cap-test.c" \
+    -L"$HOST_BUILD/output" -lbladeRF -ldl
+if "$TX_CAP_TEST" --selftest > /dev/null 2>&1; then
+    die "TX cap self-test passes without the cap"
+fi
+LD_PRELOAD="$TX_CAP" "$TX_CAP_TEST" --selftest || die "TX cap does not load"
+
 "$BLADERF_CLI_BIN" --version
 ls "$HOST_BUILD/output"

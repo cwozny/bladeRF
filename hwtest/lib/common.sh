@@ -49,6 +49,24 @@ if [ "$HWTEST_TX" != 1 ] && [ -f "$NO_TX_GUARD" ]; then
     esac
 fi
 
+# With HWTEST_TX=1 the TX power cap (lib/tx-cap.c) is preloaded instead: it
+# keeps every enabled bladeRF TX channel at <= 60 dB overall gain (~0 dBm),
+# so 20 dB pads keep the B200mini's input at <= -20 dBm (rated -15 dBm).
+TX_CAP="$HOST_BUILD/output/libhwtest-tx-cap.so"
+TX_CAP_TEST="$HOST_BUILD/output/hwtest-tx-cap-test"
+if [ "$HWTEST_TX" = 1 ] && [ -f "$TX_CAP" ]; then
+    case ":${LD_PRELOAD:-}:" in
+        *":$TX_CAP:"*) ;;
+        *) export LD_PRELOAD="$TX_CAP${LD_PRELOAD:+:$LD_PRELOAD}" ;;
+    esac
+fi
+
+require_tx_cap() {          # TX mode: stop unless the TX power cap is active
+    [ "$HWTEST_TX" = 1 ] || return 0
+    [ -f "$TX_CAP" ] || die "TX cap missing: run build-host.sh"
+    "$TX_CAP_TEST" --selftest > /dev/null 2>&1 || die "TX cap is not active"
+}
+
 require_no_tx_guard() {     # no-TX mode: stop unless the guard is active
     [ "$HWTEST_TX" = 1 ] && return 0
     [ -f "$NO_TX_GUARD" ] || die "no-TX guard missing: run build-host.sh"

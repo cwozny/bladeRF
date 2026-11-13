@@ -51,7 +51,8 @@ exec > >(tee -a "$out/run.log") 2>&1
 
 tx_ok() { [ "$HWTEST_TX" = 1 ]; }
 if tx_ok; then
-    log "TX allowed (HWTEST_TX=1): every bladeRF TX port must be cabled through >= 30 dB or terminated, no antennas"
+    require_tx_cap
+    log "TX allowed (HWTEST_TX=1, bladeRF TX gain capped at 60 dB): every bladeRF TX port must be cabled through >= 20 dB or terminated, no antennas"
 else
     require_no_tx_guard
     log "receive-only (HWTEST_TX is not 1): no TX channel is enabled; TX tests are left out"
