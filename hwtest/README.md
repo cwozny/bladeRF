@@ -53,19 +53,24 @@ phase repeats a mixed workload for `SOAK_MINUTES`.
 
 Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
 (the libbladeRF build under test, default `host-build`), `HWTEST_SKIP=<test>,...`
-(left out, logged), `HWTEST_FPGA_MIMO=1` (two-channel receive in FPGA tuning
-mode too; needs branch `fixes`, see below) and `SOAK_MINUTES`.
+(left out, logged), `HWTEST_FIXES=1` (`HOST_BUILD` has the libbladeRF fixes on
+branch `fixes`: also run the tests below that fail with every image without
+them; `HWTEST_FPGA_MIMO=1` is its older name) and `SOAK_MINUTES`.
 
 Things that fail with every image, including the official one, so the
 harness does not run them that way:
 
 * test_ctrl's `loopback` case in FPGA tuning mode: libbladeRF only supports
   the RFIC BIST loopback in host tuning mode.
-* `test_fpga_load` in host tuning mode: libbladeRF keeps its host-side AD9361
-  state across an FPGA reload on an open device, so the first sample rate
-  change after the reload times out in the AD9361's RX baseband filter
+* `test_fpga_load` in host tuning mode: after an FPGA load on an open device
+  libbladeRF keeps its host-side AD9361 state and skips the AD9361 set-up,
+  but the new image starts with its RFFE control register at the reset value
+  (`gpio_rffe_0`, 0x00018000), which holds the AD9361 in reset. The first
+  sample rate change then times out in the AD9361's RX baseband filter
   calibration (`Calibration TIMEOUT (0x16, 0x80)`). The fpga phase runs it in
   FPGA tuning mode, where the Nios starts from scratch after the reload.
+  Branch `fixes` sets the AD9361 up again after a load, and then it passes
+  with all three images (`fpga_load-host`, run with `HWTEST_FIXES=1`).
 * The full test_ctrl sweeps in host tuning mode take over 1.5 hours per image
   (the sample rate sweep alone about 50 minutes).
 * `test_rx_meta -m` (both RX channels) in FPGA tuning mode: right after the
@@ -76,7 +81,16 @@ harness does not run them that way:
   channels one at a time, and enabling the second resets the receive path
   under the running stream; host tuning mode enables both at once. Branch
   `fixes` does the same in FPGA tuning mode, and then it passes
-  (`HWTEST_FPGA_MIMO=1`).
+  (`HWTEST_FIXES=1`).
+* TX on or off during a two-channel receive, in host tuning mode: libbladeRF
+  decides whether to switch both channels of a direction together from the
+  RX stream layout, for TX too, so with an RX_X2 receive running, enabling
+  or disabling TX also switches both RX channels. When a transmit ends the
+  receive stops ("Transfer timed out for RX buffer"; 3 s on RX1+RX2 while
+  TX1 sent 0.2 s got 2.2 M of 30 M samples), and a TX_X2 layout never
+  enables both TX channels. Branch `fixes` uses the layout of the channel's
+  own direction (`rx2_txtoggle-host` and `-fpga`, run with `HWTEST_FIXES=1`
+  and `HWTEST_TX=1`).
 * test_ctrl's `threads` case in host tuning mode: test_ctrl refuses it on
   the bladeRF 2.0 (Nuand issue #705). The harness runs it in FPGA tuning
   mode only, but there it failed both times with the official image

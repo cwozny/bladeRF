@@ -5,7 +5,7 @@
 #
 # Each plan line is "<image.rbf> <label> [phase...] [VAR=<value>...]", i.e.
 # run-suite.sh's arguments plus settings for that run (SOAK_MINUTES,
-# HOST_BUILD, HWTEST_SKIP, HWTEST_FPGA_MIMO; see run-suite.sh); blank lines
+# HOST_BUILD, HWTEST_SKIP, HWTEST_FIXES; see run-suite.sh); blank lines
 # and # comments are ignored. After each
 # run the board is brought back to the official image with recover.sh; if
 # that needs a human (replug, bootloader), the campaign stops, since every
@@ -34,7 +34,7 @@ for line in "${lines[@]}"; do
     envs=(); args=()
     for w in "${words[@]}"; do
         case "$w" in
-            SOAK_MINUTES=*|HOST_BUILD=*|HWTEST_SKIP=*|HWTEST_FPGA_MIMO=*)
+            SOAK_MINUTES=*|HOST_BUILD=*|HWTEST_SKIP=*|HWTEST_FIXES=*|HWTEST_FPGA_MIMO=*)
                 envs+=("${w/=\~/=$HOME}") ;;
             *) args+=("${w/#\~/$HOME}") ;;
         esac
