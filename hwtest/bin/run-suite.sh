@@ -29,9 +29,11 @@
 #
 # Environment: HOST_BUILD selects the libbladeRF build under test (default
 # $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
-# out (logged, not in summary.jsonl); HWTEST_FPGA_MIMO=1 also runs rx_meta on
-# both RX channels in FPGA tuning mode, which needs a libbladeRF that enables
-# both channels of a MIMO layout in that mode (branch fixes; see README.md).
+# out (logged, not in summary.jsonl); HWTEST_FIXES=1 says HOST_BUILD has the
+# libbladeRF fixes on branch fixes and also runs what fails with every image
+# without them (see README.md): two-channel receive in FPGA tuning mode,
+# test_fpga_load in host tuning mode and, with HWTEST_TX=1, TX on/off during a
+# two-channel receive. HWTEST_FPGA_MIMO=1 is its older name.
 #
 # Results: $RESULTS_DIR/<label>/<time>/ with one log per test, summary.jsonl
 # ({"test", "rc", "seconds"}), rf.jsonl and meta.json. Compare runs with
@@ -56,6 +58,8 @@ HOPS="$HWTEST_DIR/lib/hops-rx.txt"
 exec > >(tee -a "$out/run.log") 2>&1
 
 tx_ok() { [ "$HWTEST_TX" = 1 ]; }
+FIXES=${HWTEST_FIXES:-${HWTEST_FPGA_MIMO:-0}}
+fixes_ok() { [ "$FIXES" = 1 ]; }
 if tx_ok; then
     require_tx_cap
     log "TX allowed (HWTEST_TX=1, bladeRF TX gain capped at 60 dB): every bladeRF TX port must be cabled through >= 20 dB or terminated, no antennas"
@@ -69,12 +73,16 @@ cat > "$out/meta.json" <<EOF
  "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false),
  "start": "$(date -Is)", "host": "$(hostname)",
  "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)",
- "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fpga_mimo": "${HWTEST_FPGA_MIMO:-0}"}
+ "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fixes": "$FIXES"}
 EOF
 
 # Output checkers for tests whose exit status does not reflect data errors
 check_tuning_fpga() {   # libbladeRF falls back to host tuning if the Nios cannot
     grep -q "Tuning Mode: FPGA" "$1"
+}
+check_rx2_complete() {  # rx2_txtoggle's receive got all its samples, without errors
+    ! grep -Eq "rror|imed out" "$1" &&
+        [ "$(stat -c %s "$out/scratch/rx2.bin" 2>/dev/null || echo 0)" -eq $((RX2_N * 4)) ]
 }
 check_iq_matches() {    # needs "IQ Matches: X / Y" lines, all with X == Y
     awk '/IQ Matches:/ { n++; split($0, a, /IQ Matches:[ ]*/); split(a[2], b, /[ ]*\/[ ]*/);
@@ -141,6 +149,27 @@ scheduled_retune_rx() {     # scheduled_retune_rx <test name>
     return $rc
 }
 
+# Two-channel receive (3 s on RX1+RX2 at 5 Msps) while TX1 sends 0.2 s of
+# zero samples into its load: the receive must get all its samples. With
+# Nuand's libbladeRF the end of the transmit switches both RX channels off in
+# host tuning mode, and FPGA tuning mode cannot receive on both channels at
+# all (README.md), so this needs HWTEST_FIXES=1 (and HWTEST_TX=1).
+RX2_N=30000000      # bladeRF-cli counts the samples of both channels
+rx2_txtoggle() {    # rx2_txtoggle <test name>
+    local tx="$out/scratch/tx-zeros.bin"
+    head -c $((1000000 * 4)) /dev/zero > "$tx"
+    rm -f "$out/scratch/rx2.bin"
+    runtest "$1" 120 @check_rx2_complete "$BCLI" \
+        -e "set frequency rx 915M" -e "set frequency tx 920M" \
+        -e "set samplerate rx 5M" -e "set samplerate tx 5M" -e "set gain tx1 0" \
+        -e "rx config file=$out/scratch/rx2.bin format=bin n=$RX2_N channel=1,2 timeout=3000" \
+        -e "tx config file=$tx format=bin repeat=1 channel=1" \
+        -e "rx start" -e "tx start" -e "tx wait 5s" -e "rx wait 15s"
+    local rc=$?
+    rm -f "$tx" "$out/scratch/rx2.bin"
+    return $rc
+}
+
 # test_ctrl cases, run one by one with -f (its quick variants; the deep phase
 # runs the full frequency, bandwidth and sample rate sweeps). In receive-only
 # mode enable_module and threads are left out (they enable TX channels);
@@ -184,11 +213,11 @@ common_tests() {
     # sample formats, rx_meta also on both RX channels (the receive-only
     # combinations of Nuand's test_regression). rx_meta reports overruns but
     # still exits 0. Both RX channels only in host tuning mode unless
-    # HWTEST_FPGA_MIMO=1: with Nuand's libbladeRF that fails in FPGA tuning
+    # HWTEST_FIXES=1: with Nuand's libbladeRF that fails in FPGA tuning
     # mode with every image (see README.md).
     runtest "rx_meta-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta"
     runtest "rx_meta_8bit-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8
-    if [ "$m" = host ] || [ "${HWTEST_FPGA_MIMO:-0}" = 1 ]; then
+    if [ "$m" = host ] || fixes_ok; then
         runtest "rx_meta_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -m
         runtest "rx_meta_8bit_mimo-$m" 300 "Overrun detected" "$T/libbladeRF_test_rx_meta" -b 8 -m
     fi
@@ -203,6 +232,9 @@ common_tests() {
             "$T/libbladeRF_test_timestamps" -t tx_onoff_nowsched -f
         runtest "digital_loopback_fw-$m" 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l fw -c 100
         runtest "digital_loopback_fpga-$m" 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l fpga -c 100
+        if fixes_ok; then
+            rx2_txtoggle "rx2_txtoggle-$m"
+        fi
     fi
     runtest "unused_sync-$m" 120 - "$T/libbladeRF_test_unused_sync"
 }
@@ -224,9 +256,13 @@ for phase in "${phases[@]}"; do
             runtest digital_loopback_rfic-host 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l rfic -c 100
         fi
         runtest tune_timing-host 600 - "$T/libbladeRF_test_tune_timing" -i 100
-        # (fpga_load runs in the fpga phase: in host tuning mode it fails
-        # with every image, including the official one, because libbladeRF
-        # keeps its host-side AD9361 state across an FPGA reload)
+        # fpga_load also runs in the fpga phase. In host tuning mode it fails
+        # with every image, including the official one, unless HOST_BUILD has
+        # the fixes: Nuand's libbladeRF keeps its host-side AD9361 state
+        # across an FPGA reload, with the AD9361 held in reset (README.md)
+        if fixes_ok; then
+            runtest fpga_load-host 300 - "$T/libbladeRF_test_fpga_load" -d "*" -f "$image"
+        fi
         # Nios round-trip latency; writes AD9361 register 0x000 (volatile), so
         # reload the image afterwards
         runtest peripheral_timing 600 - "$T/libbladeRF_test_peripheral_timing"
