@@ -3,8 +3,10 @@
 #
 #   campaign.sh <plan file>
 #
-# Each plan line is "<image.rbf> <label> [phase...] [SOAK_MINUTES=<n>]", i.e.
-# run-suite.sh's arguments; blank lines and # comments are ignored. After each
+# Each plan line is "<image.rbf> <label> [phase...] [VAR=<value>...]", i.e.
+# run-suite.sh's arguments plus settings for that run (SOAK_MINUTES,
+# HOST_BUILD, HWTEST_SKIP, HWTEST_FPGA_MIMO; see run-suite.sh); blank lines
+# and # comments are ignored. After each
 # run the board is brought back to the official image with recover.sh; if
 # that needs a human (replug, bootloader), the campaign stops, since every
 # later run would fail anyway. The campaign log goes to
@@ -13,7 +15,7 @@
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
-[ $# -eq 1 ] && [ -f "$1" ] || { sed -n '2,13p' "$0"; exit 2; }
+[ $# -eq 1 ] && [ -f "$1" ] || { sed -n '2,15p' "$0"; exit 2; }
 mapfile -t lines < "$1"
 check_good_images
 
@@ -32,12 +34,16 @@ for line in "${lines[@]}"; do
     envs=(); args=()
     for w in "${words[@]}"; do
         case "$w" in
-            SOAK_MINUTES=*) envs+=("$w") ;;
+            SOAK_MINUTES=*|HOST_BUILD=*|HWTEST_SKIP=*|HWTEST_FPGA_MIMO=*)
+                envs+=("${w/=\~/=$HOME}") ;;
             *) args+=("${w/#\~/$HOME}") ;;
         esac
     done
     log "=== run $n: ${args[*]} ${envs[*]}"
-    env "${envs[@]}" "$HWTEST_DIR/bin/run-suite.sh" "${args[@]}" < /dev/null
+    # run-suite.sh sets up its own LD_PRELOAD and LD_LIBRARY_PATH from
+    # HOST_BUILD, so don't hand it the campaign's
+    env -u LD_PRELOAD -u LD_LIBRARY_PATH "${envs[@]}" \
+        "$HWTEST_DIR/bin/run-suite.sh" "${args[@]}" < /dev/null
     log "=== run $n exit status $?"
     if ! "$HWTEST_DIR/bin/recover.sh" < /dev/null; then
         log "the board cannot be recovered without a human: stopping the campaign"
