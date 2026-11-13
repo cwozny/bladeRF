@@ -9,10 +9,11 @@
  * gain of at most TX_CAP_DB (60 dB ~= 0 dBm, so -20 dBm at the B200mini):
  *
  *   - bladerf_enable_module(TX, true) first lowers the gain of BOTH TX
- *     channels to the cap if needed (with a TX_X2 stream layout libbladeRF
- *     enables both channels whichever one is passed; a disabled bladeRF 2.0
- *     TX channel is muted and libbladeRF applies the stored gain on enable)
- *     and refuses if it cannot;
+ *     channels to the cap if needed (with a TX_X2 stream layout, libbladeRF
+ *     with the fixes on branch fixes enables both channels whichever one is
+ *     passed; Nuand's enables only the one passed, so capping both covers
+ *     either. A disabled bladeRF 2.0 TX channel is muted and libbladeRF
+ *     applies the stored gain on enable) and refuses if it cannot;
  *   - bladerf_set_gain() on an enabled TX channel is clamped to the cap;
  *   - bladerf_set_gain_stage() on an enabled TX channel: "dsa" is clamped to
  *     TX_CAP_DB - 66, any other stage is refused.

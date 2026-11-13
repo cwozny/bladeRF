@@ -19,13 +19,13 @@
 #   soak   repeats a short mixed workload for SOAK_MINUTES (default 90,
 #          i.e. longer than any IP evaluation time-out)
 #
-# Unless HWTEST_TX=1 (every bladeRF TX port cabled through >= 30 dB or
-# terminated; see README.md), the suite is receive-only and antennas may be
-# attached: tests that enable a TX channel are left out (the no-TX guard would
-# refuse them anyway), test_ctrl runs case by case without its enable_module
-# and threads cases, and the rf phase is skipped. Retunes are then exercised
-# with RX retunes scheduled on timestamps (test_scheduled_retune), which also
-# runs in TX mode.
+# Unless HWTEST_TX=1 (every bladeRF TX port cabled through >= 20 dB or
+# terminated, no antennas, TX gain capped; see README.md), the suite is
+# receive-only and antennas may be attached: tests that enable a TX channel
+# are left out (the no-TX guard would refuse them anyway), test_ctrl runs
+# case by case without its enable_module and threads cases, and the rf phase
+# is skipped. Retunes are then exercised with RX retunes scheduled on
+# timestamps (test_scheduled_retune), which also runs in TX mode.
 #
 # Environment: HOST_BUILD selects the libbladeRF build under test (default
 # $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
