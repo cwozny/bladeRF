@@ -53,7 +53,7 @@ POINTS = [
 
 BLADERF_CH = 2          # bladeRF RX2/TX2 face the B200mini
 BLADERF_TX_GAIN = 30    # dB overall (60 ~= 0 dBm): about -30 dBm
-BLADERF_RX_GAIN = 30    # dB, manual gain
+BLADERF_RX_GAIN = 15    # dB, manual gain: B200mini tone ~-15 to -25 dBFS
 B200_TX_GAIN = 50       # dB of 89.75 (~+10 dBm at full gain): about -30 dBm
 B200_TX_GAIN_MAX = 65   # never more: <= ~-15 dBm out, -35 dBm after 20 dB
 B200_RX_GAIN = 30       # dB
@@ -113,6 +113,17 @@ def analyze(x, fs, f_off):
     }
 
 
+def tone_found(m):
+    """The strongest signal must be the tone: within 10 ppm of the expected
+    frequency and 30 dB above the noise floor."""
+    if (abs(m["freq_err_hz"]) > 10e-6 * m["fc"] + 100 or
+            m["tone_dbfs"] < m["floor_dbfs"] + 30):
+        raise RuntimeError("no tone: strongest signal %.1f dBFS at %.0f Hz from "
+                           "the expected frequency (floor %.1f dBFS)"
+                           % (m["tone_dbfs"], m["freq_err_hz"], m["floor_dbfs"]))
+    return m
+
+
 def usrp():
     import uhd
     assert B200_TX_GAIN <= B200_TX_GAIN_MAX
@@ -129,10 +140,24 @@ def b200_set_tx_gain(u, gain):
         raise RuntimeError("B200mini TX gain did not stay under the cap")
 
 
+def b200_rate(u, fs, tx):
+    """Set the B200mini's sample rate exactly. UHD otherwise keeps its master
+    clock and coerces the rate (e.g. 2.5 Msps became ~2.0 Msps), which made
+    the measured tone land at the wrong frequency."""
+    evens = [k for k in range(2, 65, 2) if fs * k <= 56e6]
+    n = evens[-1] if evens else 1   # even decimation where possible
+    u.set_master_clock_rate(fs * n)
+    (u.set_tx_rate if tx else u.set_rx_rate)(fs, 0)
+    actual = (u.get_tx_rate if tx else u.get_rx_rate)(0)
+    if abs(actual - fs) > 1e-6 * fs:
+        raise RuntimeError("B200mini %s rate %.0f instead of %.0f"
+                           % ("TX" if tx else "RX", actual, fs))
+
+
 def b200_capture(u, n, fc, fs, gain):
     """Receive n samples with the B200mini; fails on any dropped samples."""
     import uhd
-    u.set_rx_rate(fs, 0)
+    b200_rate(u, fs, False)
     u.set_rx_freq(uhd.types.TuneRequest(fc), 0)
     u.set_rx_gain(gain, 0)
     st = u.get_rx_stream(uhd.usrp.StreamArgs("fc32", "sc16"))
@@ -164,7 +189,7 @@ def b200_capture(u, n, fc, fs, gain):
 def b200_transmit(u, proto, fc, fs, gain, stop, result):
     """Transmit proto repeatedly until stop is set; counts underflows."""
     import uhd
-    u.set_tx_rate(fs, 0)
+    b200_rate(u, fs, True)
     u.set_tx_freq(uhd.types.TuneRequest(fc), 0)
     b200_set_tx_gain(u, gain)
     st = u.get_tx_stream(uhd.usrp.StreamArgs("fc32", "sc16"))
@@ -196,21 +221,44 @@ def check_tx(u, point):
             "set samplerate tx%d %d" % (BLADERF_CH, fs),
             "set bandwidth tx%d %d" % (BLADERF_CH, min(fs, 56e6)),
             "set gain tx%d %d" % (BLADERF_CH, BLADERF_TX_GAIN),
-            "tx config file=%s format=bin repeat=40 channel=%d" % (path, BLADERF_CH),
+            "tx config file=%s format=bin repeat=100 channel=%d" % (path, BLADERF_CH),
             "tx start",
-            "tx wait 10s",
+            "tx wait 20s",
         ]
         result = {}
-        t = threading.Thread(target=lambda: result.update(out=run_cli(cmds)))
+
+        def bladerf_tx():
+            try:
+                result["out"] = run_cli(cmds)
+            except Exception as e:      # re-raised below
+                result["error"] = e
+
+        t = threading.Thread(target=bladerf_tx)
         t.start()
-        time.sleep(2.0)   # bladeRF tuned and streaming
+        # bladeRF-cli takes ~2.5-3 s to open, configure and start sending:
+        # capture every 0.5 s until the tone is there (the file plays 10 s)
+        t0 = time.time()
+        m = None
         try:
-            rx = b200_capture(u, int(fs * 0.05), fc, fs, B200_RX_GAIN)
+            time.sleep(2.0)
+            while m is None and time.time() - t0 < 8.0 and t.is_alive():
+                rx = b200_capture(u, int(fs * 0.05), fc, fs, B200_RX_GAIN)
+                m = analyze(rx, fs, f_off)
+                m.update(direction="bladerf_tx", fc=fc, fs=fs, f_off=f_off)
+                try:
+                    tone_found(m)
+                    m["tone_after_s"] = round(time.time() - t0, 1)
+                except RuntimeError:
+                    if time.time() - t0 < 8.0 and t.is_alive():
+                        m = None
+                        time.sleep(0.5)
         finally:
             t.join()
-    m = analyze(rx, fs, f_off)
-    m.update(direction="bladerf_tx", fc=fc, fs=fs, f_off=f_off)
-    return m
+        if "error" in result:
+            raise result["error"]
+        if m is None:
+            raise RuntimeError("bladeRF transmission ended before a capture")
+    return tone_found(m)
 
 
 def check_rx(u, point):
@@ -250,7 +298,7 @@ def check_rx(u, point):
                            "was receiving" % len(late))
     m = analyze(x, fs, f_off)
     m.update(direction="bladerf_rx", fc=fc, fs=fs, f_off=f_off)
-    return m
+    return tone_found(m)
 
 
 def main():
