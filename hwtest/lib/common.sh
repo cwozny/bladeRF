@@ -33,6 +33,28 @@ export PATH="$HWTEST_DIR/bin:$HOST_BUILD/output:$PATH"
 log()  { echo "[$(date +%H:%M:%S)] $*" >&2; }
 die()  { log "ERROR: $*"; exit 1; }
 
+# Transmitting is opt-in. Unless HWTEST_TX=1 declares that every bladeRF TX
+# port is cabled through >= 30 dB into a receiver or terminated in 50 ohms
+# (see README.md), antennas may be attached and nothing may transmit: the
+# no-TX guard is preloaded into every program the harness runs (it refuses
+# to enable TX channels in libbladeRF), bladerf-cli-safe refuses TX commands,
+# and run-suite.sh runs receive-only tests.
+HWTEST_TX="${HWTEST_TX:-0}"
+NO_TX_GUARD="$HOST_BUILD/output/libhwtest-no-tx.so"
+NO_TX_SELFTEST="$HOST_BUILD/output/hwtest-no-tx-selftest"
+if [ "$HWTEST_TX" != 1 ] && [ -f "$NO_TX_GUARD" ]; then
+    case ":${LD_PRELOAD:-}:" in
+        *":$NO_TX_GUARD:"*) ;;
+        *) export LD_PRELOAD="$NO_TX_GUARD${LD_PRELOAD:+:$LD_PRELOAD}" ;;
+    esac
+fi
+
+require_no_tx_guard() {     # no-TX mode: stop unless the guard is active
+    [ "$HWTEST_TX" = 1 ] && return 0
+    [ -f "$NO_TX_GUARD" ] || die "no-TX guard missing: run build-host.sh"
+    "$NO_TX_SELFTEST" > /dev/null 2>&1 || die "no-TX guard is not active"
+}
+
 # bladeRF-cli through the safety filter (see bin/bladerf-cli-safe)
 bcli() { "$HWTEST_DIR/bin/bladerf-cli-safe" "$@"; }
 

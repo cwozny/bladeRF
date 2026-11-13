@@ -12,8 +12,14 @@ bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
   flash-writing commands and options (`flash_image`, `flash_restore`,
   `flash_init_cal`, `erase`, `jump_to_boot`, `load fx3`, `-f`, `-L`, ...)
   and interactive mode.
-* RF: at least 30 dB of attenuation between every transmitter and receiver,
-  no antennas, bias-tees off.
+* RF: nothing transmits unless `HWTEST_TX=1` says that every bladeRF TX port
+  is cabled as below (at least 30 dB between every transmitter and receiver,
+  no antennas) or terminated in 50 ohms. Without it the harness is
+  receive-only and antennas may stay attached: a preloaded guard
+  (`lib/no-tx-guard.c`) makes libbladeRF refuse to enable any TX channel for
+  every program the harness runs, `bladerf-cli-safe` refuses `tx`/`trigger`,
+  `rf-check.py` refuses to run, and `run-suite.sh` leaves out every test
+  that enables TX. Bias-tees stay off either way.
 
 ## One-time setup (XPS 13)
 
@@ -22,7 +28,18 @@ bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
 
 Data (host build, backups, results) goes to `~/workarea/hwtest-data/`.
 
-## Cabling (fixed for the whole campaign)
+## Receive-only runs (default)
+
+With antennas on the bladeRF, or anything else that is not the cabling below,
+leave `HWTEST_TX` unset. `run-suite.sh` then runs the smoke, host, fpga and
+soak phases without their TX tests (TX streaming, TX timestamps, TX quick
+retune, digital loopbacks, test_ctrl's `enable_module` and `threads` cases)
+and skips the rf phase. Retunes are covered by RX retunes scheduled on
+timestamps with quick-tune profiles (`test_scheduled_retune`, 24 frequencies
+from `lib/hops-rx.txt`), which also runs in TX mode. Compare receive-only runs
+only with receive-only runs (`tx` in meta.json).
+
+## Cabling for TX runs (`HWTEST_TX=1`)
 
     bladeRF TX1  -> 30 dB -> bladeRF RX1        self-loop
     bladeRF TX2  -> 30 dB -> B200mini RX2       bladeRF TX measured by the USRP

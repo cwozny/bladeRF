@@ -21,7 +21,9 @@ refuse() { echo "bladerf-cli-safe: REFUSED: $*" >&2; exit 97; }
 #  - things the harness has no business doing: poke (po), calibrate (cal),
 #    set trimdac, set biastee ... on, and run (a script we could not check);
 #  - recover (r) with arguments, which loads FX3 firmware into RAM in
-#    bootloader mode: reserved for recover.sh (HWTEST_ALLOW_RECOVER=1).
+#    bootloader mode: reserved for recover.sh (HWTEST_ALLOW_RECOVER=1);
+#  - unless HWTEST_TX=1 (see lib/common.sh): tx (transmit) and trigger (tr).
+#    The no-TX guard preloaded by common.sh refuses TX in libbladeRF as well.
 check_cmd() {
     local w1 w2 rest last IFS=$' \t\n'
     read -r w1 w2 rest <<< "$(printf '%s' "$1" | tr -d "\"'" | tr '[:upper:]' '[:lower:]')"
@@ -38,6 +40,9 @@ check_cmd() {
             if [ -n "$w2" ] && [ "${HWTEST_ALLOW_RECOVER:-0}" != 1 ]; then
                 refuse "\"$1\": FX3 RAM recovery is reserved for recover.sh"
             fi ;;
+        tx|transmit|trigger|tr)
+            [ "$HWTEST_TX" = 1 ] ||
+                refuse "command \"$1\": receive-only setup (HWTEST_TX is not 1)" ;;
         set|s)
             case "$w2" in
                 trimdac) refuse "command \"$1\" changes the VCTCXO trim" ;;
