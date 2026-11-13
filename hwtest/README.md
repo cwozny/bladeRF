@@ -42,6 +42,37 @@ timestamps with quick-tune profiles (`test_scheduled_retune`, 24 frequencies
 from `lib/hops-rx.txt`), which also runs in TX mode. Compare receive-only runs
 only with receive-only runs (`tx` in meta.json).
 
+## Phases and test notes
+
+`run-suite.sh <image.rbf> <label> [phase...]` runs the phases listed at the
+top of the script. The smoke, host and fpga phases take about 10 minutes and
+run test_ctrl's quick (`-f`) variants. The deep phase runs test_ctrl's full
+frequency, bandwidth and sample rate sweeps with the AD9361 driver on the
+Nios (FPGA tuning mode), about an hour with the official image; the soak
+phase repeats a mixed workload for `SOAK_MINUTES`.
+
+Things that fail with every image, including the official one, so the
+harness does not run them that way:
+
+* test_ctrl's `loopback` case in FPGA tuning mode: libbladeRF only supports
+  the RFIC BIST loopback in host tuning mode.
+* `test_fpga_load` in host tuning mode: libbladeRF keeps its host-side AD9361
+  state across an FPGA reload on an open device, so the first sample rate
+  change after the reload times out in the AD9361's RX baseband filter
+  calibration (`Calibration TIMEOUT (0x16, 0x80)`). The fpga phase runs it in
+  FPGA tuning mode, where the Nios starts from scratch after the reload.
+* The full test_ctrl sweeps in host tuning mode take over 1.5 hours per image
+  (the sample rate sweep alone about 50 minutes).
+
+`test_scheduled_retune` used to read the start timestamp before the initial
+full tune, which can take longer (~60 ms) than its 20 ms start-up delay on a
+bladeRF 2.0 micro, so its first sync call failed with "Requested timestamp is
+in the past"; it now tunes first.
+
+`campaign.sh <plan>` runs a list of run-suite.sh runs unattended, one per
+line (`<image.rbf> <label> [phase...] [SOAK_MINUTES=<n>]`), recovering the
+board after each.
+
 ## Cabling for TX runs (`HWTEST_TX=1`)
 
     bladeRF TX1  -> 30 dB -> bladeRF RX1        self-loop
@@ -52,7 +83,10 @@ only with receive-only runs (`tx` in meta.json).
 
 | Script | What it does |
 | :----- | :----------- |
+| `bin/build-host.sh` | Builds libbladeRF, bladeRF-cli, the test programs and the no-TX guard |
 | `bin/inventory.sh` | First contact: versions, device info, full read-only flash backup |
+| `bin/run-suite.sh` | Loads an image (volatile) and runs the test phases against it |
+| `bin/campaign.sh` | Runs a plan file of run-suite.sh runs unattended |
 | `bin/recover.sh` | Recovery ladder: reload the official image, then progressively stronger soft resets; asks for a replug only as a last resort |
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
