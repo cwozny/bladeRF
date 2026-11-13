@@ -22,9 +22,11 @@ set -uo pipefail
 check_good_images
 
 good_version_ok() {
-    # Open normally and check that the FPGA answers with the expected version
+    # Open normally and check that the FPGA answers with the expected version.
+    # (tee -a: without it tee truncates /dev/stderr when that is a log file,
+    # and the caller's earlier lines in it turn into NUL bytes.)
     timeout 60 "$HWTEST_DIR/bin/bladerf-cli-safe" -e "version" 2>&1 |
-        tee /dev/stderr | grep -Eq "FPGA version:[[:space:]]+v?0\.16\.0"
+        tee -a /dev/stderr | grep -Eq "FPGA version:[[:space:]]+v?0\.16\.0"
 }
 
 load_good() {
