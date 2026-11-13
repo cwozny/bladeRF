@@ -6,7 +6,9 @@
 #   build-host.sh [bladeRF source tree]   (default: this checkout)
 #
 # The host software is the same for every FPGA image under test, so this only
-# needs rebuilding when the host code changes.
+# needs rebuilding when the host code changes. bladeRF-update (which writes
+# firmware and FPGA images to flash, and needs libcurl) and bladeRF-fsk are
+# not built.
 set -euo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 unset LD_PRELOAD    # the guard is not needed (and maybe not built yet) here
@@ -20,6 +22,8 @@ cmake -S "$src/host" -B "$HOST_BUILD" \
     -DBUILD_DOCUMENTATION=OFF \
     -DINSTALL_UDEV_RULES=OFF \
     -DTEST_LIBBLADERF=ON \
+    -DBUILD_BLADERF_UPDATE=OFF \
+    -DBUILD_BLADERF_FSK=OFF \
     -DCMAKE_INSTALL_PREFIX="$HWTEST_HOME/prefix"
 cmake --build "$HOST_BUILD" -j "$(nproc)"
 
