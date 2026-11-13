@@ -25,7 +25,7 @@ bcli -e "version" -e "info"
 log "Full flash backup (read-only)"
 bcli -e "flash_backup $out/flash_backup_full.bin 0 0x400000" ||
     bcli -e "flash_backup $out/flash_backup_full.bin"
-for t in cal fw fpga; do
+for t in cal fw; do     # the full backup also covers the FPGA autoload region
     bcli -e "flash_backup $out/flash_backup_$t.bin $t" || log "flash_backup $t failed"
 done
 ls -l "$out"

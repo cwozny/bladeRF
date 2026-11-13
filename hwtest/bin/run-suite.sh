@@ -62,6 +62,9 @@ cat > "$out/meta.json" <<EOF
 EOF
 
 # Output checkers for tests whose exit status does not reflect data errors
+check_tuning_fpga() {   # libbladeRF falls back to host tuning if the Nios cannot
+    grep -q "Tuning Mode: FPGA" "$1"
+}
 check_iq_matches() {    # needs "IQ Matches: X / Y" lines, all with X == Y
     awk '/IQ Matches:/ { n++; split($0, a, /IQ Matches:[ ]*/); split(a[2], b, /[ ]*\/[ ]*/);
                          if (b[1] + 0 != b[2] + 0) bad++ }
@@ -98,8 +101,8 @@ runtest() {
 # (Re)load the image under test and make sure its Nios answers; if not, run
 # the recovery ladder and stop: later tests would only produce noise.
 load_image() {
-    if ! runtest "load-$1" 120 - bcli -l "$image" ||
-       ! runtest "version-$1" 60 "Unknown \(FPGA not loaded\)" bcli -e version; then
+    if ! runtest "load-$1" 120 - "$BCLI" -l "$image" ||
+       ! runtest "version-$1" 60 "Unknown \(FPGA not loaded\)" "$BCLI" -e version; then
         log "image under test does not come up; recovering and stopping"
         "$HWTEST_DIR/bin/recover.sh"
         exit 1
@@ -162,7 +165,7 @@ for phase in "${phases[@]}"; do
     case "$phase" in
     smoke)
         load_image smoke
-        runtest info 60 - bcli -e info -e version -e "print"
+        runtest info 60 - "$BCLI" -e info -e version -e "print"
         runtest flash_id 60 - "$T/libbladeRF_test_flash_id"
         runtest open-smoke 300 - "$T/libbladeRF_test_open" -c 10
         ;;
@@ -184,7 +187,7 @@ for phase in "${phases[@]}"; do
     fpga)
         load_image fpga
         export BLADERF_DEFAULT_TUNING_MODE=fpga
-        runtest tuning_mode-fpga 60 "host" bcli -e "print tuning_mode"
+        runtest tuning_mode-fpga 60 @check_tuning_fpga "$BCLI" -e "print tuning_mode"
         common_tests fpga
         unset BLADERF_DEFAULT_TUNING_MODE
         ;;
