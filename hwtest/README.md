@@ -16,7 +16,7 @@ bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
   `flash_init_cal`, `erase`, `jump_to_boot`, `load fx3`, `-f`, `-L`, ...)
   and interactive mode.
 * RF: nothing transmits unless `HWTEST_TX=1` says that every bladeRF TX port
-  is cabled as below (at least 30 dB between every transmitter and receiver,
+  is cabled as below (at least 20 dB between every transmitter and receiver,
   no antennas) or terminated in 50 ohms. Without it the harness is
   receive-only and antennas may stay attached: a preloaded guard
   (`lib/no-tx-guard.c`) makes libbladeRF refuse to enable any TX channel for
@@ -123,15 +123,18 @@ off USB ends the run and the campaign: only a replug brings it back.
 
 ## Cabling for TX runs (`HWTEST_TX=1`)
 
-    bladeRF TX1  -> 30 dB -> bladeRF RX1        self-loop
-    bladeRF TX2  -> 30 dB -> B200mini RX2       bladeRF TX measured by the USRP
-    B200mini TX/RX -> 30 dB -> bladeRF RX2      USRP tone measured by the bladeRF
+    bladeRF TX1, RX1 -> 50 ohm loads            (nothing measures a TX1 -> RX1 loop yet)
+    bladeRF TX2  -> 20 dB -> B200mini RX2       bladeRF TX measured by the USRP
+    B200mini TX/RX -> 20 dB -> bladeRF RX2      USRP tone measured by the bladeRF
 
-At least 30 dB per link and no antennas anywhere: that keeps every receiver
-at or below -15 dBm (Ettus's limit for the B200mini's RF inputs) even with a
-transmitter at full power (bladeRF 2.0 micro +8 dBm, B200mini about +10 dBm).
-One 20 dB pad is not enough; two in series (40 dB) are. Nothing measures the
-TX1 -> RX1 loop yet, so a 50 ohm load on TX1 will do instead.
+At least 20 dB per link and no antennas anywhere. At full power (bladeRF 2.0
+micro +8 dBm, B200mini about +10 dBm) 20 dB would not keep every receiver at
+or below -15 dBm (Ettus's limit for the B200mini's RF inputs), so both
+transmitters are capped: with `HWTEST_TX=1` every harness program has
+`lib/tx-cap.c` preloaded, which keeps the bladeRF's overall TX gain at or
+below 60 dB (about 0 dBm, so -20 dBm at the B200mini), and `rf-check.py`
+never sets the B200mini's TX gain above 65 dB (about -15 dBm out). Without
+the caps it would take 30 dB per link.
 
 ## Scripts
 
