@@ -2,7 +2,8 @@
 
 This is the test record for the changes on the fork's branches `niosv`
 (building the bladeRF 2.0 micro FPGA with Quartus 25.1, which needs the
-Nios V CPU) and `fixes` (libbladeRF and firmware bug fixes). It says what was
+Nios V CPU; `niosv-foxhunt` adds the foxhunt revision's firmware) and
+`fixes` (libbladeRF and firmware bug fixes). It says what was
 tested, how, on which FPGA images and libbladeRF builds, and what the results
 were. It is the source for the "Testing" sections of the pull requests and
 issue reports, and tells how to repeat each test.
@@ -297,7 +298,7 @@ before that was correct. On Nuand's image, so not a regression, but an
 intermittent stall of unknown cause; repeated below.
 
 (Re-run with the current harness, the overclock repeats and the loopback
-soak repeats: section 9, to come.)
+soak repeats: section 9.)
 
 ### 8. The AD9361-to-FPGA LVDS interface with the AD9361's BIST (2026-11-14 morning)
 
@@ -401,11 +402,241 @@ error: a bit error rate below 1.1 × 10^-12 (95 % confidence) at the design
 rate, on the Nios V build as on Nuand's. Overclocked at 76.8 Msps in the same
 runs: RX1 40 bad samples on C, 14,823 on A; RX2 garbage on both.
 
+### 9. Repeats with the current harness; how far overclocking goes (2026-11-14 morning)
+
+**Rerun of the format, overclock and trigger phases** (job `morning2`, harness
+53394f98, results `results/{A,B,C}-new2/`): the same results as in section 7
+on all three images, with the fixed checks. All 15 full-rate receive and all
+15 transmit cases pass (10 each in host tuning mode, 5 in FPGA tuning mode);
+the loopback fails only for two channels in SC16 (every
+image, the loopback's own limit, section 7) and now passes at 30.72 and
+40.96 Msps in both modes; `rx_order` and the trigger pass. Overclocked at
+122.88 Msps: test_oversample and the SC8 counter pass, the received pulses
+fail (corrupted samples, every image, section 8), the TX pulse cases fail
+only on the carrier (below), and SC8 meta fails on C only, in both modes.
+
+**Loopback soak repeat** (`results/{A,C}-loopsoak/`, 30 minutes, SC16 set to
+30.72 Msps): A and C pass, 0 errors (A: 73.7 G samples back). A's stall in
+section 7 did not come back: one stall in two 30-minute runs on Nuand's
+image, none in two on ours (B one run).
+
+**Where C's overclocked SC8 meta stream stops** (`diag-after/1114-0805`,
+job `after`, FPGA counter, 20 s per rate, one channel): clean on A and C at
+76.8, 92.16, 100, 107.52 and 115.2 Msps (1.5 to 2.3 G samples each, no
+sequence jump); at 122.88 Msps A passes (2.46 G samples) and C stalls
+("Transfer timed out"). With 100 ms reads scheduled 5 ms ahead and every
+sample checked (`rxsched`), A 418 of 418 at 122.88 Msps, C fails on the
+first. So it is the last step only, and only on C: overclocking runs the
+FPGA's sample logic at 245.76 MHz against its 125 MHz constraint, where C's
+timing model is weakest (section 2: Fmax 126 vs 133 MHz).
+
+**The highest clean overclocked rate: 68 Msps** (BIST PRBS, SC8, every
+sample checked, same runs):
+
+| Rate | C RX1 | C RX2 | A RX1 | A RX2 |
+|---|---|---|---|---|
+| 64, 66 Msps, 60 s | 0 bad | 0 bad | | |
+| 68 Msps, 60 s | 0 bad | 0 bad | | |
+| 70 Msps, 60 s | 0 bad (4.2 G) | 297 bad (7e-8) | | |
+| 68 Msps, 5 minutes | 0 bad (20.4 G) | 0 bad (20.4 G) | 0 bad (20.4 G) | 0 bad (20.4 G) |
+
+The 70 Msps errors were in the same bit as in section 8 (bit 3 of SC8, bit 7
+of the 12-bit sample). At 68 Msps on A and C: RX pulses from the B200mini
+(10 µs/100 µs and 100 µs/1 ms) pass (the 1 µs case fails only its carrier
+estimate, as for TX below), timestamped TX pulses (SC8 meta, all
+three widths) pass, and 100 ms recordings (SC8 meta, scheduled 5 ms ahead)
+are 479 of 479 clean. At 100 Msps the recordings still arrive complete and
+on time on both images (876 and 878 bursts), but the samples are garbage
+(BIST: no repeating pattern; pulses not found).
+
+**Overclocked TX with metadata, re-measured** (job `after2`,
+`diag-octx/1114-0925`): apart from a pulse cut off by the start of a
+capture, every pulse has the right width and interval and the count is
+right, on A, B and C at 122.88 Msps in both tuning modes and on A and C at
+68 Msps (host mode). The
+carrier on 10 µs and 100 µs pulses is within 0.8 to 1.3 kHz of the expected
+frequency; on 1 µs pulses the estimate reads 9.5 kHz high on every image
+(the 1 µs averaging window is as long as the pulse), so the check now
+measures the carrier only on pulses of 3 µs or more, and leaves out the
+first and last pulse of a capture (a pulse cut off by the capture's start
+gave the single PW/PRI misfits). Re-analysed with those fixes (da525f1a),
+every saved capture passes.
+
+**Noise floor**, from the pulse captures (nothing transmitted, SC8, RX gain
+10 dB; the same on A and C):
+
+| Setting | Noise | Phase spread inside a pulse |
+|---|---|---|
+| 61.44 Msps | −42.4 dBFS rms (below one 8-bit step) | 3–5° |
+| 61.44 Msps with the overclock feature on | −36.5 dBFS | 5–6° |
+| 70 Msps overclocked | −36.5 dBFS | 5–6° |
+| 100 Msps overclocked | −18.8 dBFS (A), −20.6 (C) | ~100° (random) |
+
+The overclock feature costs about 6 dB of noise at any rate (pulses also come
+out about 4 dB stronger, so about 2 dB of SNR); at 100 Msps the extra 18 dB
+are interface errors (BIST fails there), not the filters.
+
+### 10. Recording 100 ms bursts to disk (2026-11-14)
+
+The user's recorders read 100 ms bursts and write each to its own file;
+`hwtest-stream rxsched` does the same with every sample checked against the
+FPGA's counter (or, with `-N`, the first and last of each burst), either
+scheduled a few ms ahead (`BLADERF_META_FLAG_RX_NOW` off) or back to back
+(`-N`, RX_NOW, as the bladeRF paths of radar_recorder and sdr_channelizer
+do), with libbladeRF's buffers set like theirs (`-S`).
+
+**First runs** (job `after`, then `after2`, alternating images, 16-bit,
+reads scheduled 5 ms ahead, libbladeRF buffers for 59.7 ms at 61.44 Msps):
+
+| Run | A: failed / bursts | longest write | C: failed / bursts | longest write |
+|---|---|---|---|---|
+| one channel, 61.44 Msps, 2 min | 0 / 928 | | 1 / 929 (first burst) | |
+| one channel, 61.44 Msps, 10 min | | | 7 / 4,651 | |
+| two channels, 30.72 Msps, 2 min | 0 / 931 | | 27 / 904 | |
+| two channels, 30.72 Msps, 3 min, round 1 | 0 / 1,394 | 20.9 ms | 36 / 1,382 | 133.7 ms |
+| one channel, 61.44 Msps, 3 min, round 1 | 1 / 1,391 (first) | 22.8 ms | 15 / 1,389 | 121.6 ms |
+| two channels, 30.72 Msps, 3 min, round 2 | 0 / 1,391 | 59.7 ms | 1 / 1,398 | 53.7 ms |
+| one channel, 61.44 Msps, 3 min, round 2 | 1 / 1,395 (first) | 31.3 ms | 62 / 1,385 | 131.3 ms |
+| the same without files | 0 | | 0 | |
+
+Apart from first-burst overruns, every failure was a burst whose timestamp
+had passed by the time libbladeRF got to it (BLADERF_ERR_TIME_PAST), in runs
+with long disk writes.
+
+**The mechanism** (`sched-diag2`, `diag-sched/1114-1148`, job `after3`):
+with no files and a fixed pause instead of the write, the share of bursts
+scheduled too late depends on the pause in a sawtooth with an ~8 ms period,
+identical on both images (20 s per pause):
+
+| Pause (ms) | 50 | 64 | 66 | 68 | 70 | 72 | 74 | 76 | 78 | 80 | 84 | 86 | 88 | 92 | 94 | 96 | 98 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A too late (%) | 42 | 1 | 5 | 47 | 38 | 0 | 6 | 35 | 48 | 0 | 39 | 46 | 17 | 38 | 39 | 9 | 0 |
+| C too late (%) | 32 | 0 | 11 | 49 | 20 | 1 | 6 | 48 | 45 | 0 | 41 | 49 | 8 | 25 | 49 | 35 | 0 |
+
+Each pause adds the ~17 ms counter check and a 0.2 ms timestamp read. After
+an overrun libbladeRF's sync worker drops the next `num_transfers - 1`
+transfers (`sync_worker.c`; here 31 of 16,384 samples, 8.3 ms at
+61.44 Msps, with 256 buffers, 32 in flight): whether a scheduled timestamp falls inside such a run depends on
+the pause modulo that. With the read scheduled 20 ms ahead instead of 5,
+nothing failed at any pause (66 to 86 ms, 0 of 89 to 98 bursts, both
+images). In the disk runs, every too-late burst followed a pause longer than
+the 59.7 ms the buffers hold.
+
+**Disk, alternating, C first** (one file rewritten, 2 min each):
+
+| Order | Image | failed / bursts (too late) | longest write | pauses > 59.7 ms |
+|---|---|---|---|---|
+| 1 | C | 1 / 919 (0; the first burst) | 54.5 ms | 1 |
+| 2 | A | 14 / 912 (13) | 134.2 ms | 32 |
+| 3 | C | 3 / 915 (2) | 93.5 ms | 6 |
+| 4 | A | 3 / 910 (3) | 95.6 ms | 10 |
+
+So it is the disk, not the image: the earlier C-only failures came with C's
+runs having the long writes, and here A had them. Writes to tmpfs: 1 of 909
+(A) and 1 of 912 (C), both the first burst.
+
+**The user's patterns, back to back** (`-N`, nothing scheduled, a new file
+per burst):
+
+| Pattern | A | C |
+|---|---|---|
+| 16-bit, 61.44 Msps, 4 × 1 Mi-sample buffers, 2 transfers (34.1 ms), synchronous writes, 2 min × 2 | 2 / 1,202 and 2 / 1,202 lost | 2 / 1,202 and 4 / 1,204 lost |
+| 8-bit, 100 Msps overclocked, same buffers (21 ms), 2 min | 3 / 1,202 lost | 5 / 1,204 lost |
+| the same three without files (16-bit also with radar_recorder's 64 × 8,192 / 16 buffers), 1 min each | 0 lost | 0 lost |
+
+At 61.44 Msps every loss was one of the first two to four bursts after the
+stream started (probably the start-of-stream disorder of section 7's
+`rx_order`, which with metadata shows up as an overrun); after that, 1,200 bursts per run
+arrived complete on both images, with writes of up to 21 ms. At 100 Msps
+each loss followed a write of about 33.5 ms, longer than the 21 ms the
+buffers hold at that rate. More buffers would absorb both.
+
+### 11. The micro's other revisions: wlan, adsb, foxhunt (builds, 2026-11-14)
+
+Built with Quartus Prime Lite 25.1 (Nios V) from `niosv` (wlan, adsb) and
+`niosv-foxhunt` (foxhunt), with Nuand's code (master 35174c30) built with
+23.1.1 (Nios II) as the reference, same fitter seed:
+
+| Revision | Build | Logic | Worst setup | Worst recovery |
+|---|---|---|---|---|
+| wlan xA9 | Nuand, 23.1.1, Nios II | 35,762 ALMs (31 %) | +0.219 ns | −3.630 ns |
+| wlan xA9 | ours, 25.1, Nios V | 36,536 ALMs (32 %) | +0.600 ns | −3.803 ns |
+| adsb xA4 | Nuand + adsb fix, 23.1.1 | 15,884 ALMs (86 %) | −2.814 ns | +0.914 ns |
+| adsb xA4 / xA5 / xA9 | ours + adsb fix, 25.1 | 16,433 (89 %) / 16,735 (58 %) / 16,718 (15 %) | −1.737 / −2.526 / −1.938 ns | +0.526 / +0.990 / +0.073 ns |
+| foxhunt xA4 | Nuand, 23.1.1, Nios II | 5,614 ALMs (30 %) | +1.438 ns | +3.208 ns |
+| foxhunt xA4 | niosv-foxhunt, 23.1.1, Nios II | identical to Nuand's | | |
+| foxhunt xA4 / xA9 / xA5 | niosv-foxhunt, 25.1, Nios V | 6,667 (36 %) / 6,641 (6 %) / 6,645 (23 %) | +1.046 / +0.427 / −0.012 ns | +3.866 / +4.004 / +3.348 ns |
+
+- **wlan** needs Nuand/bladeRF-wiphy (8623814) next to the bladeRF tree and
+  its IP generated (`fpga/ip/generate.sh`): the FFT and Viterbi cores
+  regenerate with 25.1 (19.1 → 25.1, also 23.1) and the image needs no
+  OpenCore Plus tethering. The recovery violation is Nuand's: in both builds
+  every failing endpoint (564 in Nuand's, 567 in ours, TNS −1,887 / −1,904
+  ns) is reset by `wlan_rx`'s `rst_rr(0)`, a reset synchronized to the
+  80 MHz clock and used as the asynchronous reset of 40 MHz (sample clock)
+  logic (upstream draft 13; `recovery-groups.tcl`).
+- **adsb** has not built since 2025.05 (upstream draft 12): it needs
+  Nuand/bladeRF-adsb in `hdl/fpga/ip/nuand/adsb` and two one-line fixes
+  (branch `adsb-fix-master`), applied to the working trees for these builds.
+  The setup misses are in the ADS-B decoder, filters and preamble detector
+  at the sample clock's 125 MHz constraint, worst in Nuand's own build;
+  bladeRF_adsb runs at 16 Msps (32 MHz).
+- **foxhunt** with Nios II from our branch generates the same Qsys system as
+  Nuand's (no line of `nios_system.qsys` differs) with the same fit and
+  timing; only the firmware differs (the VCTCXO tamer fix). Its Nios V
+  firmware is 82.6 KB (43.0 KB of the RAM left). The xA5's −0.012 ns is the
+  AD9361 RX LVDS capture path again (section 2); Nuand's foxhunt xA5 (the
+  bench build below) misses it by 0.112 ns.
+- wlan and adsb were built only (no ADS-B or Wi-Fi signals on the bench).
+
+### 12. foxhunt on the bench: Nios II against Nios V (2026-11-14)
+
+`bin/foxhunt-check.py` (README.md): the B200mini records 75 s from just
+before the load and decodes the Morse code. Nuand's foxhunt firmware
+transmits on TX1, which the bench terminates, and switches on the TX bias
+tee, which would put DC on the cabled port, so both images under test were
+built with `setup/foxhunt-tx2.patch` (TX2, through 20 dB to the B200mini;
+bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
++ patch, 25.1, Nios V. Job `after7` and a trial run
+(`foxhunt/1114-1714`, `foxhunt/trial-1114-1647`; numbers from
+`--analyze` of the saved captures, harness 1d7a0e63):
+
+| Run | Messages decoded | Dot | Tone from carrier | Tone level | TX on per message | TX off | Message period |
+|---|---|---|---|---|---|---|---|
+| N2 trial | 3 × "PARIS PARIS" | 120.3 ms | 937.05 Hz | −23.8 dBFS | 13.02 s | 14.0 s | 27.016 s |
+| N2-1 | 3 × "PARIS PARIS" | 120.3 ms | 936.98 Hz | −23.8 dBFS | (leakage too weak) | | 27.016 s |
+| V-1 | 3 × "PARIS PARIS" | 120.3 ms | 936.77 Hz | −23.8 dBFS | 13.02 s | 10.0 s | 23.016 s |
+| N2-2 | 3 × "PARIS PARIS" | 120.3 ms | 937.01 Hz | −23.8 dBFS | 13.02 s | 14.0 s | 27.016 s |
+| V-2 | 3 × "PARIS PARIS" | 120.3 ms | 936.78 Hz | −23.8 dBFS | 13.02 s | 10.0 s | 23.016 s |
+
+- Everything the FPGA times is identical: the text, the dot length (dash 2.98
+  dots, gaps 119.4 ms: the tone starts and stops at zero crossings), the
+  tone and its level, 80 dB above the gaps, and TX on for 13.02 s per
+  message.
+- Both images key twice as fast as the firmware asks: 120 ms dots (10 WPM)
+  and 0.5 s pauses for its 240 ms (5 WPM) and 1 s. The tone generator counts
+  durations in TX sample clock cycles, which run at twice the 768 ksps
+  sample rate. The tone is right (937.5 Hz: the firmware's 1 kHz rounded to
+  the generator's phase step).
+- The one difference is CPU timing: TX stays off for 14.0 s on Nuand's
+  Nios II/e where the firmware asks `usleep()` for 10 s, and for 10.0 s on
+  the Nios V, whose HAL times usleep with the machine timer. The first tone
+  also comes earlier after the load on V (3.27 s against 3.74 s from the
+  start of the load; the firmware's first `usleep(1 s)`).
+- The carrier drifts by 8 to 30 Hz over a capture against the B200mini's
+  clock (the firmware writes a fixed VCTCXO trim, 0x1ec1); the tone offset
+  is measured against the carrier at the same moment.
+- Each image transmits until the next load; `recover.sh` put the official
+  image back afterwards.
+
 ## Evidence per change
 
 ### Quartus 25.1 build of the bladeRF 2.0 micro (Nios V), branch `niosv`
 
-- Builds: xA4, xA5, xA9 with Quartus Prime Lite 25.1 (section 2).
+- Builds: xA4, xA5, xA9 with Quartus Prime Lite 25.1 (section 2); the
+  micro's other revisions, wlan xA9, adsb xA4/xA5/xA9 (with Nuand's decoder
+  and the adsb fix) and foxhunt xA4/xA5/xA9, build too, with the same timing
+  as Nuand's own builds of them (section 11).
 - Image C passes everything image A passes, in every campaign above
   (sections 3 to 7), in both tuning modes, with Nuand's libbladeRF and with
   the fixes; RF performance matches A (section 4); no time-out in 150-minute
@@ -413,6 +644,21 @@ runs: RX1 40 bad samples on C, 14,823 on A; RX2 garbage on both.
 - Image B: the restructured Qsys script still builds Nuand's Nios II design,
   with the same fit and timing as A, and passes the same tests.
 - Only one board (xA5) was tested on hardware; xA4 and xA9 were built only.
+
+### niosv-foxhunt 54a2a77a, 3cb48e29: share the Nios V firmware build; build the foxhunt firmware for Nios V
+
+- 54a2a77a moves the application-independent part of the Nios V firmware
+  build into `niosv_app.cmake`: the hosted revision's RAM image is
+  byte-identical before and after (xA4, Quartus 25.1,
+  `nios_system_ram.hex` md5 57a32993323672674ee56998429aa8f4), also when
+  built inside the foxhunt revision.
+- 3cb48e29: foxhunt builds with Quartus 25.1 for xA4, xA5 and xA9 (section
+  11); its Nios V firmware is 82.6 KB, 43.0 KB of the RAM left. With
+  Quartus 23.1.1 the branch still builds foxhunt with Nios II exactly as
+  Nuand's code does (same Qsys system, fit and timing).
+- On the bench (section 12) the Nios V foxhunt sends the same keyed tone as
+  Nuand's Nios II build: same text, timing, frequency and level; only its
+  10 s pause between messages is exactly 10 s (14.0 s on the Nios II/e).
 
 ### b49041c9 libbladeRF: discard stale Nios responses
 
@@ -473,6 +719,15 @@ runs: RX1 40 bad samples on C, 14,823 on A; RX2 garbage on both.
    libbladeRF, and the second time the bladeRF dropped off USB until it was
    replugged. It has been left out of unattended runs; it needs a rerun with
    someone at the bench.
+5. Nuand's foxhunt firmware as it is (TX1, TX bias tee on) has not been run:
+   the bench terminates TX1 and has no DC block. The bench images differ
+   from it in those two lines only (section 12).
+6. The first one to four bursts after a stream starts can overrun, on every
+   image (section 10; upstream draft 9).
+7. Seen in Nuand's designs, not caused by these changes: foxhunt keys at
+   twice the speed its firmware asks for, and Nuand's Nios II/e `usleep()`
+   runs about 40 % long (section 12); the wlan revision fails recovery timing
+   and the adsb revision setup timing in Nuand's own builds (section 11).
 
 ## How to repeat
 

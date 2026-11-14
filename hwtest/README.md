@@ -271,6 +271,24 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   and the trigger reports fired. The counter modes bypass the trigger gate,
   so it receives baseband samples.
 
+### foxhunt (`bin/foxhunt-check.py`, run by hand)
+
+The micro's foxhunt revision is a standalone transmitter: once loaded, its
+own Nios firmware keys a tone in Morse code ("PARIS PARIS") on 915 MHz,
+pauses with TX off, and repeats, until another image is loaded. The host
+cannot talk to it, so `foxhunt-check.py <foxhunt.rbf>` starts a B200mini
+capture (RX2, 100 ksps), loads the image with
+`BLADERF_FORCE_NO_FPGA_PRESENT=1` and decodes what arrives: text, dot length,
+the tone's offset from the carrier, level, how long TX stays on and off.
+`--analyze <capture.npy>` re-analyzes a capture saved with `--save`. Run
+`recover.sh` afterwards to put the official image back.
+
+Nuand's firmware transmits on TX1, which this bench terminates, and turns on
+the TX bias tee, which puts DC on the TX port: never load it here. Build the
+images to compare with `setup/foxhunt-tx2.patch` applied (TX2, no bias tee);
+at its fixed 10 dB attenuation about -22 dBm then reaches the B200mini.
+Transmits: only with `HWTEST_TX=1`.
+
 `campaign.sh <plan>` runs a list of run-suite.sh runs unattended, one per
 line (`<image.rbf> <label> [phase...] [VAR=<value>...]` with the settings
 above), recovering the board after each. A failed test that leaves the bladeRF
@@ -303,6 +321,7 @@ the caps it would take 30 dB per link.
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
 | `bin/pulse-check.py` | Overclocked pulse trains both ways, and full-rate TX in every sample format, against the B200mini |
+| `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
