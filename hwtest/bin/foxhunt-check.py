@@ -3,6 +3,8 @@
 
   foxhunt-check.py RBF [--label NAME] [--seconds 75] [--out results.jsonl]
                        [--save capture.npy]
+  foxhunt-check.py --analyze capture.npy [--label NAME] [--out results.jsonl]
+      (only the analysis, of a capture saved with --save; transmits nothing)
 
 The foxhunt revision is a standalone transmitter. Once loaded, its own Nios
 firmware (hdl/fpga/platforms/bladerf-micro/software/foxhunt) sets up the
@@ -334,12 +336,21 @@ def load(rbf):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("rbf")
+    ap.add_argument("rbf", nargs="?")
     ap.add_argument("--label", default="")
     ap.add_argument("--seconds", type=float, default=75)
     ap.add_argument("--out", default="-")
     ap.add_argument("--save", help="keep the capture (complex64 .npy)")
+    ap.add_argument("--analyze", help="analyze this saved capture instead")
     a = ap.parse_args()
+    out = sys.stdout if a.out == "-" else open(a.out, "a")
+    if a.analyze:
+        m = {"label": a.label, "capture": a.analyze}
+        m.update(analyze(np.load(a.analyze)))
+        out.write(json.dumps(m) + "\n")
+        return 0 if m.get("pass") else 1
+    if not a.rbf:
+        ap.error("RBF or --analyze is required")
     if os.environ.get("HWTEST_TX") != "1":
         sys.exit("foxhunt-check.py: a foxhunt image transmits on its own: set "
                  "HWTEST_TX=1 only with the transmit cabling (see the help)")
@@ -371,7 +382,6 @@ def main():
         m.update(analyze(x))
         if "first_tone_s" in m:
             m["first_tone_after_load_start_s"] = round(m["first_tone_s"] - 2.0, 3)
-    out = sys.stdout if a.out == "-" else open(a.out, "a")
     out.write(json.dumps(m) + "\n")
     out.flush()
     return 0 if m.get("pass") else 1
