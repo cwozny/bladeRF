@@ -18,6 +18,19 @@
 #          (transmits: only with HWTEST_TX=1)
 #   soak   repeats a short mixed workload for SOAK_MINUTES (default 90,
 #          i.e. longer than any IP evaluation time-out)
+#   formats  every sample format (SC16, SC16 meta, SC8, SC8 meta, packed),
+#          one and two channels, at full rate (see below), with every sample
+#          checked: RX against the FPGA's sample counter, TX against the
+#          B200mini, and TX+RX through the FPGA's digital loopback (SC16, SC8;
+#          HWTEST_TX=1 for the last two)
+#   oc     the AD9361 overclocked (BLADERF_FEATURE_OVERSAMPLE, 122.88 Msps,
+#          8-bit): Nuand's test_oversample on both RX channels, the counter
+#          check, and pulses both ways against the B200mini (HWTEST_TX=1)
+#   trigger  one bladeRF as trigger master (J51-1): the RX trigger holds the
+#          samples back until it fires
+#   fullsoak  the counter check at 61.44 Msps for FULLSOAK_RX_MIN minutes
+#          (default 60), then the loopback check at 30.72 Msps for
+#          FULLSOAK_LOOP_MIN minutes (default 30)
 #
 # Unless HWTEST_TX=1 (every bladeRF TX port cabled through >= 20 dB or
 # terminated, no antennas, TX gain capped; see README.md), the suite is
@@ -312,6 +325,94 @@ for phase in "${phases[@]}"; do
                 python3 "$HWTEST_DIR/bin/rf-check.py" all --out "$out/rf-$m.jsonl"
         done
         cat "$out"/rf-*.jsonl > "$out/rf.jsonl" 2>/dev/null
+        ;;
+    formats)
+        # Full rate: the highest rate at which a format fits the USB 3 load
+        # of Nuand's usual maximum, one channel of SC16 at 61.44 Msps
+        # (245.76 MB/s), but at most the AD9361's 61.44 Msps. (libbladeRF
+        # warns above 80 Msps in total over both channels: SC8 and packed
+        # with two channels exceed that.) Two channels only in host tuning
+        # mode unless HWTEST_FIXES=1 (Nuand's libbladeRF cannot receive on
+        # both channels in FPGA tuning mode, see README.md).
+        #  - fmt_rx: every sample from the FPGA's counter checked
+        #    (hwtest-stream rxcheck; after 0.25 s of warm-up, see rx_order)
+        #  - fmt_loop: TX through the FPGA's digital loopback back to RX,
+        #    every sample checked; SC16 and SC8 only (libbladeRF's
+        #    asynchronous interface), at 4 Msps (the loopback is not paced
+        #    by the sample clock and overloads USB at high rates) and, with
+        #    one channel, at 30.72 (SC16) and 40.96 Msps (SC8)
+        #  - fmt_txrf: TX at full rate, the B200mini checks the tone
+        #  - rx_order: libbladeRF's start-up reordering, 10 x 1 s with no
+        #    warm-up (informational: counts in the log, never fails)
+        load_image formats
+        for m in host fpga; do
+            export BLADERF_DEFAULT_TUNING_MODE=$m
+            for spec in "sc16 x1 61.44M" "sc16meta x1 61.44M" "sc8 x1 61.44M" \
+                        "sc8meta x1 61.44M" "packed x1 61.44M" \
+                        "sc16 x2 30.72M" "sc16meta x2 30.72M" "sc8 x2 61.44M" \
+                        "sc8meta x2 61.44M" "packed x2 40.96M"; do
+                read -r f l full <<< "$spec"
+                if [ "$l" = x2 ] && [ "$m" = fpga ] && ! fixes_ok; then
+                    continue
+                fi
+                runtest "fmt_rx_${f}_$l-$m" 120 - "$T/hwtest-stream" rxcheck -f "$f" -l "$l" -r "$full" -t 20
+                if tx_ok; then
+                    runtest "fmt_txrf_${f}_$l-$m" 300 - python3 "$HWTEST_DIR/bin/pulse-check.py" \
+                        tx-fmt --format "$f" --layout "$l" --rate "${full%M}e6" --out "$out/fmt-$m.jsonl"
+                fi
+            done
+            if tx_ok; then
+                for spec in "sc16 x1 4M" "sc8 x1 4M" "sc16 x2 4M" "sc8 x2 4M" \
+                            "sc16 x1 30.72M" "sc8 x1 40.96M"; do
+                    read -r f l r <<< "$spec"
+                    if [ "$l" = x2 ] && [ "$m" = fpga ] && ! fixes_ok; then
+                        continue
+                    fi
+                    runtest "fmt_loop_${f}_${l}_${r%M}M-$m" 120 - "$T/hwtest-stream" loopback -f "$f" -l "$l" -r "$r" -t 10
+                done
+            fi
+        done
+        export BLADERF_DEFAULT_TUNING_MODE=host
+        runtest rx_order-host 300 - bash -c 'for i in 1 2 3 4 5 6 7 8 9 10; do
+            "$0" rxcheck -f sc16 -r 61.44M -t 1 -W 0 | grep -E "coverage|RESULT"; done; true' "$T/hwtest-stream"
+        unset BLADERF_DEFAULT_TUNING_MODE
+        cat "$out"/fmt-*.jsonl > "$out/fmt.jsonl" 2>/dev/null
+        ;;
+    oc)
+        # The overclock setting stays in the AD9361 after the programs exit:
+        # reload the image afterwards.
+        load_image oc
+        for m in host fpga; do
+            export BLADERF_DEFAULT_TUNING_MODE=$m
+            runtest "oc_oversample_rx1-$m" 120 - "$T/libbladeRF_test_oversample" -c 1
+            runtest "oc_oversample_rx2-$m" 120 - "$T/libbladeRF_test_oversample" -c 2
+            runtest "oc_rx_sc8-$m" 120 - "$T/hwtest-stream" rxcheck -f sc8 -O -r 122.88M -t 20
+            runtest "oc_rx_sc8meta-$m" 120 - "$T/hwtest-stream" rxcheck -f sc8meta -O -r 122.88M -t 20
+            if tx_ok; then
+                runtest "oc_pulse_rx-$m" 900 - python3 "$HWTEST_DIR/bin/pulse-check.py" oc-rx --out "$out/oc-$m.jsonl"
+                runtest "oc_pulse_tx-$m" 900 - python3 "$HWTEST_DIR/bin/pulse-check.py" oc-tx --out "$out/oc-$m.jsonl"
+            fi
+        done
+        unset BLADERF_DEFAULT_TUNING_MODE
+        cat "$out"/oc-*.jsonl > "$out/oc.jsonl" 2>/dev/null
+        load_image after-oc
+        ;;
+    trigger)
+        # The trigger gates ADC samples (the counter modes bypass it)
+        load_image trigger
+        for m in host fpga; do
+            BLADERF_DEFAULT_TUNING_MODE=$m runtest "trigger_rx-$m" 60 - "$T/hwtest-stream" trigger rx -f sc16meta -r 10M
+        done
+        ;;
+    fullsoak)
+        load_image fullsoak
+        export BLADERF_DEFAULT_TUNING_MODE=host
+        rxs=$((${FULLSOAK_RX_MIN:-60} * 60)); loops=$((${FULLSOAK_LOOP_MIN:-30} * 60))
+        runtest fullsoak_rx_sc16-host $((rxs + 300)) - "$T/hwtest-stream" rxcheck -f sc16 -r 61.44M -t "$rxs"
+        if tx_ok; then
+            runtest fullsoak_loop_sc16-host $((loops + 300)) - "$T/hwtest-stream" loopback -f sc16 -r 30.72M -t "$loops"
+        fi
+        unset BLADERF_DEFAULT_TUNING_MODE
         ;;
     soak)
         load_image soak

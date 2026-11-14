@@ -51,5 +51,10 @@ if "$TX_CAP_TEST" --selftest > /dev/null 2>&1; then
 fi
 LD_PRELOAD="$TX_CAP" "$TX_CAP_TEST" --selftest || die "TX cap does not load"
 
+log "Building hwtest-stream (streaming checks: formats, oc, trigger, fullsoak phases)"
+cc -O2 -Wall -Wextra -Werror -I"$inc" \
+    -o "$HOST_BUILD/output/hwtest-stream" "$HWTEST_DIR/lib/hwtest-stream.c" \
+    -L"$HOST_BUILD/output" -lbladeRF -lpthread -lm
+
 "$BLADERF_CLI_BIN" --version
 ls "$HOST_BUILD/output"
