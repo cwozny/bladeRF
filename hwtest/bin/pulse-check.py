@@ -155,15 +155,25 @@ def measure_pulses(x, fs, smooth_s):
         raise RuntimeError("only %d pulses found" % len(rises))
     pw = (falls - rises) / fs
     pri = np.diff(rises) / fs
-    # carrier: F_OFF plus the phase step of the mixed-down signal well
-    # inside the pulses
+    # carrier: the strongest spectral line of the capture with the gaps
+    # zeroed (a phase-step estimate is pulled off by images and spurs)
     core = s.astype(bool) & np.roll(s.astype(bool), 2 * w) & np.roll(s.astype(bool), -2 * w)
-    k = np.nonzero(core[:-1] & core[1:])[0]
-    ph = np.angle(np.sum(bb[k + 1] * np.conj(bb[k])))
+    n = 1 << int(np.floor(np.log2(len(x))))
+    g = (x[:n] * core[:n]).astype(np.complex64)
+    spec = np.abs(np.fft.fft(g))
+    f = np.fft.fftfreq(n, 1 / fs)
+    near = np.nonzero(np.abs(f - F_OFF) < 1e6)[0]
+    i = int(near[np.argmax(spec[near])])
+    if 0 < i < n - 1:     # parabolic interpolation between bins
+        a0, a1, a2 = np.log(spec[i - 1] + 1e-12), np.log(spec[i] + 1e-12), np.log(spec[i + 1] + 1e-12)
+        den = a0 - 2 * a1 + a2
+        frac = 0.5 * (a0 - a2) / den if den != 0 else 0.0
+    else:
+        frac = 0.0
     return {
         "pulses": int(len(rises)),
         "pw": pw, "pri": pri,
-        "freq_hz": float(F_OFF + ph * fs / (2 * np.pi)),
+        "freq_hz": float(f[i] + frac * fs / n),
         "on_dbfs": float(20 * np.log10(a_on + 1e-12)),
         "on_off_db": float(20 * np.log10((a_on + 1e-12) / (a_off + 1e-12))),
     }

@@ -2,6 +2,8 @@
 
 Scripts for comparing FPGA images (e.g. Nios II vs Nios V builds) on a real
 bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
+[TESTING.md](TESTING.md) records what was tested with them, how, and the
+results.
 
 ## Safety rules
 
@@ -162,6 +164,67 @@ at 5 Msps the sync worker overran every few hundred iterations, so it now
 uses 64. (libbladeRF has started RX streaming at `bladerf_enable_module`
 since 712d49e2, so a few overruns at start-up are normal.)
 
+### Sample formats, overclocking, triggers (formats, oc, trigger, fullsoak)
+
+These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
+`bin/pulse-check.py`:
+
+* **rxcheck** receives the FPGA's 32-bit counter (`BLADERF_RX_MUX_32BIT_
+  COUNTER`) in a sample format and checks every sample of every channel.
+  What arrives depends on the format: SC16 carries all 32 bits (I low, Q
+  high), SC8 the low 16 (I bits 7..0, Q 15..8), the packed format only I's
+  low 12 bits; with two channels both carry the same value. SC16 and the meta
+  formats identify every sample exactly; SC8 and packed cannot tell late
+  samples from lost ones, so any jump fails there.
+* libbladeRF sometimes delivers whole receive buffers **out of order** at the
+  start of a stream (in the first ~10 ms; seen with the official image in
+  about two of three 61.44 Msps runs; with SC16 meta and two channels it once
+  also duplicated 528 samples per channel). Nothing is lost, but the order is
+  wrong, which is libbladeRF's doing (712d49e2 added a reorder queue for
+  this). rxcheck therefore records which stretches of samples arrived:
+  stretches that never arrive or arrive twice fail, late ones only warn. It
+  also skips the first 0.25 s (`-W`); `rx_order-host` runs 10 starts with no
+  warm-up to count the reordering per image.
+* **loopback** sends a pattern that numbers every sample (and tags the
+  channel) through the FPGA's digital loopback (`BLADERF_RX_MUX_DIGITAL_
+  LOOPBACK`) and checks every sample that comes back. It uses libbladeRF's
+  asynchronous interface, like Nuand's `test_digital_loopback`: with the
+  synchronous interface on both sides no sample ever came back (TX and RX
+  transfers timed out whatever the order of enabling, though the Nios
+  register writes were the same as test_digital_loopback's). So it covers SC16
+  and SC8, not the packed or meta formats. The loopback is not paced by the
+  sample clock: RX sees 1.3 to 1.6 times the nominal rate, so at high rates it
+  overloads USB (SC8 at 61.44 Msps lost 4 of every 4096 samples with the
+  official image). With two channels, SC16 lost samples even at 4 Msps with
+  the official image; SC8 did not.
+* **pulse-check.py tx-fmt** transmits a tone at full rate in each format (TX2,
+  and TX1 into its load for two channels); the B200mini checks the frequency
+  and that the envelope never drops (an underrun sends zeros for at least a
+  buffer).
+* Nuand's `test_digital_loopback -D counting` is not usable with `-b 8`: it
+  resynchronises by reading the 8-bit samples as 16-bit words and reported 94 %
+  matches at 61.44 Msps. The harness uses its own pattern.
+* **Overclocking** (`bladerf_enable_feature(BLADERF_FEATURE_OVERSAMPLE)`,
+  122.88 Msps, 8-bit only): Nuand's `test_oversample` (both RX channels) only
+  checks the time a 1 s capture takes, the power and that samples are not
+  stuck at zero. The counter check at 122.88 Msps tests the FPGA and USB at
+  that rate; `pulse-check.py oc-rx` and `oc-tx` send pulse trains both ways
+  (pulse widths 1, 10 and 100 us, repetition intervals 10, 100 and 1000 us)
+  and check every pulse width and interval against what was sent, which also
+  proves the sample rate. With the official image on this board the
+  overclocked samples are corrupted in both directions: with nothing
+  connected the 8-bit RX samples spread over ±76 LSB (I) with 4 % at full
+  scale, against ±0.5 LSB at 61.44 Msps, and the B200mini sees no pulses in
+  the bladeRF's overclocked output. The counter path is fine at 122.88 Msps,
+  so the FPGA's data path and USB keep up; the corruption points at the
+  AD9361 or its data interface at the overclocked rate (on the xA5 that
+  interface's receive clock is also the design's one failing timing path, in
+  Nuand's build as in ours).
+* **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
+  that no samples arrive in 1 s, fires it and checks that samples then arrive
+  and the trigger reports fired. The counter modes bypass the trigger gate,
+  so it receives baseband samples.
+
 `campaign.sh <plan>` runs a list of run-suite.sh runs unattended, one per
 line (`<image.rbf> <label> [phase...] [VAR=<value>...]` with the settings
 above), recovering the board after each. A failed test that leaves the bladeRF
@@ -193,6 +256,8 @@ the caps it would take 30 dB per link.
 | `bin/recover.sh` | Recovery ladder: reload the official image, then progressively stronger soft resets; asks for a replug only as a last resort |
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
+| `bin/pulse-check.py` | Overclocked pulse trains both ways, and full-rate TX in every sample format, against the B200mini |
+| `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |
