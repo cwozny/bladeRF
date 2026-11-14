@@ -328,7 +328,8 @@ register writes; the FPGA does nothing different:
 | Rate (interface clock) | A | B | C |
 |---|---|---|---|
 | 10, 30.72, 61.44 Msps, with and without the feature | pass | | pass |
-| 76.8 Msps (307.2 MHz) | pass (400,785,408 samples) | | pass |
+| 76.8 Msps (307.2 MHz), 5 s, RX1 | pass (400,785,408 samples) | | pass |
+| 76.8 Msps, 20 s each, RX1 / RX2, after 6 minutes of streaming (bist campaign) | 3,105 bad (2e-6) / 10.4 M bad (0.7 %) | 2 bad (1e-9) / garbage | 9,347 bad (6e-6) / 19.9 M bad (1.3 %) |
 | 78 Msps (312 MHz) | 8,665 bad (2.1e-5) | 8 bad (2.0e-8) | 9 bad (2.2e-8) |
 | 80 Msps (320 MHz) | 4,275 bad (1.0e-5) | 504,719 bad (1.2e-3) | 3,790 bad (9.1e-6) |
 | 82 Msps (328 MHz) | 1.4 % bad | garbage | 633,370 bad (1.5e-3) |
@@ -348,9 +349,10 @@ the rate is.
 - So overclocked receive at 122.88 Msps cannot work on this board with any
   image: the interface would need 491.52 MHz and delivers errors from about
   312 MHz. This explains the corrupted overclocked samples in section 7.
-- The interface keeps its margin with the Nios V build: at room temperature
-  it carries the pattern intact at 1.25 times its design rate (76.8 Msps) on
-  A and C alike, and A, B and C start to fail at the same point. The negative
+- The interface keeps its margin with the Nios V build: errors start at
+  about 76.8 Msps, 1.25 times its design rate, on A, B and C alike, always in
+  the same bit, and which image does best changes from channel to channel and
+  run to run (at 76.8 Msps B was best on RX1 and worst on RX2). The negative
   slack (−0.154 ns in Nuand's build, −0.110 ns in C) is for the slow 85 °C
   model; one board at room temperature cannot show what happens at the
   corners.
@@ -368,7 +370,20 @@ transmitted; the first 1 M samples skipped):
 
 The same corruption as with the harness, on Nuand's image as on C.
 
-(BIST campaign on A, B and C, with 10-minute runs on C and A: to come.)
+**BIST campaign** (`bist` phase, harness 53394f98; results
+`results/{A,B,C}-bist/`): every case at the design rate passes on A, B and C
+with no bad sample:
+
+| Case | Samples checked per channel (each image) |
+|---|---|
+| PRBS, SC16, RX1 and RX2, 61.44 Msps, 2 minutes each | 7,389,560,832 (B RX2: 7,389,577,216; C RX2: 7,389,544,448) |
+| PRBS, SC16, RX1 + RX2 together, 30.72 Msps, 2 minutes | 3,703,177,216 (B, C: 3,703,169,024) |
+| PRBS, SC8, RX1 + RX2 together, 61.44 Msps, 20 s | 1,245,577,216 |
+| tone, SC16, RX1, 61.44 Msps, 20 s | 1,245,577,216 |
+
+The overclocked cases (76.8 Msps on RX1 and RX2, 122.88 Msps on RX1) fail on
+every image, as in the table above: they measure the margin, not a
+regression. (10-minute runs on C and A: to come.)
 
 ## Evidence per change
 

@@ -433,10 +433,11 @@ for phase in "${phases[@]}"; do
         #    two channels of SC16 carry over USB; SC8 at 61.44 Msps)
         #  - bist_tone: the BIST tone instead (a different bit pattern)
         #  - bist_oc: overclocked (BLADERF_FEATURE_OVERSAMPLE, SC8) at
-        #    76.8 Msps (307.2 MHz) on each channel, which delivered the
-        #    pattern intact with every image, and at 122.88 Msps (491.52 MHz),
-        #    which delivered garbage with every image, Nuand's included: that
-        #    case fails everywhere and documents the limit (README.md, bist)
+        #    76.8 Msps (307.2 MHz) on each channel, the edge of what the
+        #    interface carries (errors in one bit with every image), and at
+        #    122.88 Msps (491.52 MHz), garbage with every image, Nuand's
+        #    included: these cases fail everywhere; they measure the margin,
+        #    not a regression (README.md, bist)
         load_image bist
         export BLADERF_DEFAULT_TUNING_MODE=host
         bs=$((${BIST_MIN:-2} * 60))

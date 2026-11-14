@@ -241,10 +241,13 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   rate: 245.76 MHz at 61.44 Msps, within the 250 MHz that bladerf.sdc and
   the LVDS receiver (altlvds_rx, 500 Mbps per lane) are set up for.
   libbladeRF's overclocking is a set of undocumented AD9361 register writes;
-  the FPGA does nothing different. With it the pattern arrived intact up to
-  76.8 Msps (307.2 MHz) and as garbage from 92.16 Msps on (no repeat in 2^24
-  samples, and no match with the golden period anywhere), the same with
-  Nuand's image and the rebuilds; the phase runs 76.8 and 122.88 Msps. The
+  the FPGA does nothing different. With it the pattern arrived intact at
+  76.8 Msps (307.2 MHz) in 5-second runs, with errors in one bit at that rate
+  in 20-second runs and from 78 Msps on, and as garbage from about 86 Msps
+  (no repeat in 2^24 samples, and no match with the golden period anywhere),
+  the same with Nuand's image and the rebuilds. The phase's overclocked cases
+  (76.8 and 122.88 Msps) therefore fail with every image: they show the
+  margin, not a regression. The
   BIST is switched off at the end (also on SIGTERM); `lib/bist-selftest.c`
   (run by build-host.sh) checks the checker on synthetic data.
 * **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
