@@ -89,6 +89,7 @@ PRI_ONE_REL, PRI_ONE_ABS = 0.02, 250e-9   # each PRI (a lost buffer is >100 us)
 PW_MEAN_REL, PW_MEAN_ABS = 0.02, 100e-9
 PW_ONE_REL, PW_ONE_ABS = 0.10, 250e-9
 ON_OFF_DB = 15
+CARRIER_MIN_PW = 3e-6                 # carrier measured on pulses this long or more
 
 
 def pulse_train(fs, pw, pri, amp):
@@ -166,6 +167,12 @@ def measure_pulses(x, fs, smooth_s):
             rises.append(tr)
             falls.append(tf)
     rises, falls = np.array(rises), np.array(falls)
+    # not the first or the last pulse either: the capture's start or end can
+    # cut one, and a receiver's first samples can be a short gap that passes
+    # for a rise (one 10 us pulse measured 0.22 us that way, 9.8 us late)
+    edge = 2 if len(rises) >= 5 else 0
+    if edge:
+        rises, falls = rises[1:-1], falls[1:-1]
     if len(rises) < 3:
         raise RuntimeError("only %d pulses found" % len(rises))
     pw = (falls - rises) / fs
@@ -179,19 +186,25 @@ def measure_pulses(x, fs, smooth_s):
     # (The strongest spectral line is not reliable either: a pulse train's
     # lines are a PRF apart and neighbouring lines differ by only
     # sinc(PW/PRI), 1.6 % at 10 % duty.)
-    n1 = max(1, int(round(fs * 1e-6)))
-    k1 = np.ones(n1, dtype=np.float32) / n1
-    s1 = (np.convolve(bb0.real, k1, mode="same") + 1j * np.convolve(bb0.imag, k1, mode="same")).astype(np.complex128)
-    span = np.zeros(len(x), dtype=bool)
-    for r, f in zip(rises, falls):
-        span[int(np.ceil(r)):int(np.floor(f)) + 1] = True
-    cm = span[1:] & span[:-1]
-    if not cm.any():
-        raise RuntimeError("pulses too short to measure the carrier")
-    rr = np.sum(s1[1:][cm] * np.conj(s1[:-1][cm]))
-    freq = F_OFF + float(np.angle(rr)) * fs / (2 * np.pi)
+    # Only on pulses of CARRIER_MIN_PW or more: in a shorter pulse every 1 us
+    # window straddles an edge, the gated IQ image no longer cancels, and 1 us
+    # pulses read 9.5 kHz high at 122.88 Msps on every image (and 69 kHz low,
+    # or not at all, when received at 68 Msps); their PW and PRI still count.
+    freq = None
+    if np.median(pw) >= CARRIER_MIN_PW:
+        n1 = max(1, int(round(fs * 1e-6)))
+        k1 = np.ones(n1, dtype=np.float32) / n1
+        s1 = (np.convolve(bb0.real, k1, mode="same") + 1j * np.convolve(bb0.imag, k1, mode="same")).astype(np.complex128)
+        span = np.zeros(len(x), dtype=bool)
+        for r, f in zip(rises, falls):
+            span[int(np.ceil(r)):int(np.floor(f)) + 1] = True
+        cm = span[1:] & span[:-1]
+        if cm.any():
+            rr = np.sum(s1[1:][cm] * np.conj(s1[:-1][cm]))
+            freq = F_OFF + float(np.angle(rr)) * fs / (2 * np.pi)
     return {
         "pulses": int(len(rises)),
+        "edge_pulses_dropped": edge,
         "pw": pw, "pri": pri,
         "freq_hz": freq,
         "on_dbfs": float(20 * np.log10(a_on + 1e-12)),
@@ -211,7 +224,7 @@ def judge(m, pw_nom, pri_nom, dur, fc):
         "pri_max_us": float(pri.max() * 1e6), "pri_std_ns": float(pri.std() * 1e9),
         "pri_err_ppm": float((pri.mean() - pri_nom) / pri_nom * 1e6),
         "expected_pulses": round(exp_pulses, 1),
-        "freq_err_hz": m["freq_hz"] - F_OFF,
+        "freq_err_hz": None if m["freq_hz"] is None else m["freq_hz"] - F_OFF,
     }
     m.update(res)
     errors = []
@@ -228,9 +241,10 @@ def judge(m, pw_nom, pri_nom, dur, fc):
     badw = np.nonzero(np.abs(pw - pw_nom) > max(PW_ONE_REL * pw_nom, PW_ONE_ABS))[0]
     if len(badw):
         errors.append("%d PWs off by more than %.0f ns" % (len(badw), max(PW_ONE_REL * pw_nom, PW_ONE_ABS) * 1e9))
-    if abs(m["pulses"] - exp_pulses) > 2:
-        errors.append("%d pulses in %.3f s, expected %.1f" % (m["pulses"], dur, exp_pulses))
-    if abs(m["freq_err_hz"]) > 10e-6 * fc + 100:
+    found = m["pulses"] + m.get("edge_pulses_dropped", 0)
+    if abs(found - exp_pulses) > 2:
+        errors.append("%d pulses in %.3f s, expected %.1f" % (found, dur, exp_pulses))
+    if m["freq_err_hz"] is not None and abs(m["freq_err_hz"]) > 10e-6 * fc + 100:
         errors.append("carrier %.0f Hz from the expected" % m["freq_err_hz"])
     if m["on_off_db"] < ON_OFF_DB:
         errors.append("pulses only %.1f dB above the gaps" % m["on_off_db"])

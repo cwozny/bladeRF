@@ -1130,6 +1130,16 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     double ts_lat, ts_lat_sum = 0, ts_lat_max = 0, rx_t, rx_sum = 0, rx_max = 0;
     double wr_t, wr_sum = 0, wr_max = 0;
     uint64_t ts_lat_slow = 0, nrx = 0, nwr = 0;
+    /* The pause between two reads (file write, gap, timestamp read): the
+     * stream keeps running, so a pause longer than libbladeRF's buffers hold
+     * is an overrun, after which libbladeRF's RX worker drops another
+     * NUM_TRANSFERS - 1 transfers even once buffers are free again
+     * (sync_worker.c, resubmit_count); a read scheduled closer than that is
+     * "already past" when the drop outlasts the lead. */
+    double xfer_s = (double)buffer_samples(o->fmt) / (o->rate * nc);
+    double buf_s = NUM_BUFFERS * xfer_s, drop_s = (NUM_TRANSFERS - 1) * xfer_s;
+    double t_rx_end = 0, pause = 0, pause_max = 0;
+    uint64_t long_pauses = 0, past_after_long = 0;
     bool have_ref = false;
     char *buf;
     int rc = 0, status;
@@ -1160,6 +1170,9 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
            o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
            o->lead_ms, o->out ? "a write to " : "", o->out ? o->out : "",
            o->out ? " and " : "", o->gap_ms, o->seconds);
+    printf("rxsched: libbladeRF's %u buffers hold %.1f ms; after an overrun its RX worker "
+           "drops %.1f ms more (%u transfers)\n", NUM_BUFFERS, 1e3 * buf_s, 1e3 * drop_s,
+           NUM_TRANSFERS - 1);
     t0 = t1 = now();
     while (now() - t0 < o->seconds) {
         uint64_t ts_now = 0, ts, j, v0 = 0;
@@ -1178,20 +1191,31 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
         memset(&md, 0, sizeof(md));
         md.timestamp = ts;                  /* scheduled, not RX_NOW */
         ta = now();
+        pause = (t_rx_end > 0) ? ta - t_rx_end : 0;
+        if (pause > pause_max) {
+            pause_max = pause;
+        }
+        if (pause > buf_s) {
+            long_pauses++;
+        }
         status = bladerf_sync_rx(dev, buf, (unsigned)total, &md, TIMEOUT_MS);
-        rx_t = now() - ta;
+        t_rx_end = now();
+        rx_t = t_rx_end - ta;
         bursts++;
         if (status == BLADERF_ERR_TIME_PAST) {
             uint64_t ts_after = 0;
             past++;
             bad++;
+            if (pause > buf_s) {
+                past_after_long++;
+            }
             bladerf_get_timestamp(dev, BLADERF_RX, &ts_after);
             if (reports++ < MAX_REPORTS) {
                 printf("  burst %" PRIu64 ": timestamp 0x%" PRIx64 " already past (timestamp "
                        "read took %.2f ms; the read gave up after %.2f ms; %.2f ms later "
-                       "the FPGA was %.2f ms past it)\n", bursts, ts, 1e3 * ts_lat,
-                       1e3 * rx_t, 1e3 * (now() - ta - rx_t),
-                       1e3 * ((double)(int64_t)(ts_after - ts)) / o->rate);
+                       "the FPGA was %.2f ms past it; %.1f ms since the previous read)\n",
+                       bursts, ts, 1e3 * ts_lat, 1e3 * rx_t, 1e3 * (now() - ta - rx_t),
+                       1e3 * ((double)(int64_t)(ts_after - ts)) / o->rate, 1e3 * pause);
             }
             continue;
         }
@@ -1288,6 +1312,9 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
            bursts ? 1e3 * ts_lat_sum / (double)bursts : 0.0, 1e3 * ts_lat_max, ts_lat_slow,
            nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
            nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
+    printf("rxsched: pauses between reads %.1f ms max, %" PRIu64 " longer than the "
+           "%.1f ms the buffers hold; %" PRIu64 " of the %" PRIu64 " too late followed "
+           "one\n", 1e3 * pause_max, long_pauses, 1e3 * buf_s, past_after_long, past);
     if (rc == 0 && (bad != 0 || bursts == 0)) {
         rc = 1;
     }
