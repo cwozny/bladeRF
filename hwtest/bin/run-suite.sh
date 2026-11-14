@@ -31,6 +31,8 @@
 #   fullsoak  the counter check at 61.44 Msps for FULLSOAK_RX_MIN minutes
 #          (default 60), then the loopback check at 30.72 Msps for
 #          FULLSOAK_LOOP_MIN minutes (default 30)
+#   sched  a recorder's scheduled 100 ms bursts (timestamps), every sample
+#          checked against the FPGA's counter (SCHED_S seconds per case)
 #   bist   the AD9361's built-in PRBS at its RX data port, every sample
 #          checked: the AD9361-to-FPGA LVDS interface alone, at full rate
 #          (BIST_MIN minutes per case, default 2) and overclocked
@@ -394,6 +396,8 @@ for phase in "${phases[@]}"; do
             if tx_ok; then
                 runtest "oc_pulse_rx-$m" 900 - python3 "$HWTEST_DIR/bin/pulse-check.py" oc-rx --out "$out/oc-$m.jsonl"
                 runtest "oc_pulse_tx-$m" 900 - python3 "$HWTEST_DIR/bin/pulse-check.py" oc-tx --out "$out/oc-$m.jsonl"
+                runtest "oc_pulse_tx_meta-$m" 900 - python3 "$HWTEST_DIR/bin/pulse-check.py" oc-tx \
+                    --oc-format sc8meta --out "$out/oc-$m.jsonl"
             fi
         done
         unset BLADERF_DEFAULT_TUNING_MODE
@@ -415,6 +419,26 @@ for phase in "${phases[@]}"; do
         if tx_ok; then
             runtest fullsoak_loop_sc16-host $((loops + 300)) - "$T/hwtest-stream" loopback -f sc16 -r 30.72M -t "$loops"
         fi
+        unset BLADERF_DEFAULT_TUNING_MODE
+        ;;
+    sched)
+        # A recorder's pattern of scheduled bursts (hwtest-stream rxsched):
+        # 100 ms bursts, each scheduled 5 ms after the current RX timestamp
+        # and written to a file before the next one is scheduled, with the
+        # FPGA's counter as the source: every burst must start at its
+        # timestamp, arrive complete and have every sample in place. The
+        # stream runs on between bursts, so the FPGA overruns there, as it
+        # does for such a recorder. Host tuning mode, SCHED_S seconds per
+        # case (default 60), the full rate of each format and layout.
+        load_image sched
+        export BLADERF_DEFAULT_TUNING_MODE=host
+        ss=${SCHED_S:-60}
+        for spec in "sc16meta x1 61.44M" "sc8meta x1 61.44M" "sc16meta x2 30.72M" "sc8meta x2 61.44M"; do
+            read -r f l r <<< "$spec"
+            runtest "sched_${f}_$l-host" $((ss + 120)) - "$T/hwtest-stream" rxsched -f "$f" -l "$l" -r "$r" \
+                -t "$ss" -o "$out/scratch/sched.bin"
+        done
+        rm -f "$out/scratch/sched.bin"
         unset BLADERF_DEFAULT_TUNING_MODE
         ;;
     bist)

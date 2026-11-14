@@ -89,6 +89,8 @@ phases (details in run-suite.sh):
   evaluation time-out).
 - **formats, oc, trigger, fullsoak:** see "Sample formats, overclocking,
   triggers, full-rate soak" below.
+- **sched:** a recorder's scheduled 100 ms bursts with timestamps, written to
+  a file between bursts, every sample checked against the FPGA's counter.
 - **bist:** the AD9361's built-in test pattern (PRBS, or a tone) replaces the
   received samples at its RX data port, so every sample crosses only the
   AD9361-to-FPGA LVDS interface (the xA5's one failing timing path) with a
@@ -383,7 +385,21 @@ with no bad sample:
 
 The overclocked cases (76.8 Msps on RX1 and RX2, 122.88 Msps on RX1) fail on
 every image, as in the table above: they measure the margin, not a
-regression. (10-minute runs on C and A: to come.)
+regression.
+
+**10-minute runs** (`BIST_MIN=10`; `results/C-bist-long/20261114-060813`,
+`results/A-bist-long/20261114-063939`), no bad sample on C or A:
+
+| Case | C | A |
+|---|---|---|
+| PRBS, SC16, RX1, 61.44 Msps, 10 minutes | 36,880,678,912 samples | 36,880,662,528 |
+| PRBS, SC16, RX2, 61.44 Msps, 10 minutes | 36,880,695,296 | 36,880,678,912 |
+| PRBS, SC16, RX1 + RX2, 30.72 Msps, 10 minutes | 18,448,736,256 per channel | 18,448,736,256 per channel |
+
+That is about 2.66 × 10^12 bits per image (12 bits each of I and Q) with no
+error: a bit error rate below 1.1 × 10^-12 (95 % confidence) at the design
+rate, on the Nios V build as on Nuand's. Overclocked at 76.8 Msps in the same
+runs: RX1 40 bad samples on C, 14,823 on A; RX2 garbage on both.
 
 ## Evidence per change
 

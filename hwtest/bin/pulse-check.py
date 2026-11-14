@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Overclock and TX sample-format checks of the bladeRF against the B200mini.
 
-  pulse-check.py oc-rx  [--out results.jsonl]
-      B200mini TX pulses -> bladeRF RX2, overclocked: 122.88 Msps, 8-bit
-  pulse-check.py oc-tx  [--out results.jsonl]
-      bladeRF TX2 pulses, overclocked: 122.88 Msps, 8-bit -> B200mini RX
+  pulse-check.py oc-rx  [--oc-rate RATE] [--out results.jsonl]
+      B200mini TX pulses -> bladeRF RX2, overclocked: 122.88 Msps (or RATE),
+      8-bit
+  pulse-check.py oc-tx  [--oc-rate RATE] [--oc-format sc8|sc8meta] [--out ...]
+      bladeRF TX2 pulses, overclocked: 122.88 Msps (or RATE), 8-bit (sc8meta:
+      with metadata, one burst started "now") -> B200mini RX
   pulse-check.py tx-fmt --format FMT --layout x1|x2 --rate RATE [--out ...]
       bladeRF transmits a tone in sample format FMT at RATE (on TX2, and on
       TX1 into its load for x2) -> B200mini RX: the tone must be there,
@@ -55,7 +57,7 @@ STREAM = os.environ.get("HWTEST_STREAM") or os.path.join(
 
 FC = 915e6              # carrier
 F_OFF = 3e6             # tone offset from the carrier
-OC_RATE = 122.88e6      # overclocked bladeRF sample rate
+OC_RATE = 122.88e6      # overclocked bladeRF sample rate (default; --oc-rate)
 B200_FS = 20e6          # B200mini sample rate for the pulse cases
 CAPTURE_S = 0.25        # capture length
 BLADERF_CH = 2          # RX2/TX2 face the B200mini
@@ -66,9 +68,13 @@ TRIES = 3
 
 # (PW, PRI) in seconds, exact in samples at each transmitter's rate
 OC_RX_CASES = [(1e-6, 10e-6), (10e-6, 100e-6), (100e-6, 1e-3)]       # B200mini at 20 Msps
-OC_TX_CASES = [(123 / OC_RATE, 1229 / OC_RATE),                       # bladeRF at 122.88 Msps
-               (1229 / OC_RATE, 12288 / OC_RATE),
-               (12288 / OC_RATE, 122880 / OC_RATE)]
+
+
+def oc_tx_cases(rate):
+    """The same widths and intervals in whole samples at the bladeRF's rate
+    (at 122.88 Msps: 123/1229, 1229/12288 and 12288/122880 samples)."""
+    return [(round(pw * rate) / rate, round(pri * rate) / rate) for pw, pri in OC_RX_CASES]
+
 
 PRI_PPM = 50e-6                       # mean PRI
 PRI_ONE_REL, PRI_ONE_ABS = 0.02, 250e-9   # each PRI (a lost buffer is >100 us)
@@ -228,24 +234,24 @@ def run_stream(args, timeout):
     return p.stdout
 
 
-def quiet_stats():
+def quiet_stats(rate):
     """Overclocked capture with nothing transmitted: the 8-bit samples'
     spread and how many sit at full scale (a sign of corrupted samples)."""
     with tempfile.TemporaryDirectory(dir="/dev/shm") as d:
         path = os.path.join(d, "quiet.bin")
         run_stream(["rxcap", "-f", "sc8", "-c", str(BLADERF_CH), "-O",
-                    "-r", "%d" % OC_RATE, "-F", "%d" % FC, "-g", str(OC_RX_GAIN),
-                    "-n", "%d" % int(OC_RATE * 0.02), "-o", path], 60)
+                    "-r", "%d" % rate, "-F", "%d" % FC, "-g", str(OC_RX_GAIN),
+                    "-n", "%d" % int(rate * 0.02), "-o", path], 60)
         r = np.fromfile(path, dtype=np.int8).astype(np.float32)
     i, q = r[0::2], r[1::2]
     return {"quiet_i_std_lsb": float(i.std()), "quiet_q_std_lsb": float(q.std()),
             "quiet_full_scale_pct": float(100 * np.mean((np.abs(r) >= 127)))}
 
 
-def oc_rx_case(u, pw, pri):
+def oc_rx_case(u, pw, pri, rate=OC_RATE):
     """B200mini transmits pulses; the bladeRF captures them overclocked."""
     proto = pulse_train(B200_FS, pw, pri, 0.5)
-    quiet = quiet_stats()
+    quiet = quiet_stats(rate)
     stop = threading.Event()
     txr = {}
     t = threading.Thread(target=rf.b200_transmit,
@@ -256,8 +262,8 @@ def oc_rx_case(u, pw, pri):
         with tempfile.TemporaryDirectory(dir="/dev/shm") as d:
             path = os.path.join(d, "rx.bin")
             out = run_stream(["rxcap", "-f", "sc8", "-c", str(BLADERF_CH), "-O",
-                              "-r", "%d" % OC_RATE, "-F", "%d" % FC, "-g", str(OC_RX_GAIN),
-                              "-n", "%d" % int(OC_RATE * CAPTURE_S), "-o", path], 60)
+                              "-r", "%d" % rate, "-F", "%d" % FC, "-g", str(OC_RX_GAIN),
+                              "-n", "%d" % int(rate * CAPTURE_S), "-o", path], 60)
             x = load_iq(path, True)
     finally:
         stop.set()
@@ -267,16 +273,16 @@ def oc_rx_case(u, pw, pri):
         raise RuntimeError("B200mini transmit thread failed")
     if late:
         raise RuntimeError("B200mini TX underflowed %d times during the capture" % len(late))
-    m = measure_pulses(x, OC_RATE, 0.25e-6)
+    m = measure_pulses(x, rate, 0.25e-6)
     m.update(quiet)
-    m.update(case="oc_rx", fs=OC_RATE, fc=FC,
+    m.update(case="oc_rx", fs=rate, fc=FC,
              host_rate_line=[l for l in out.splitlines() if l.startswith("rxcap:")][-1:])
-    return judge(m, pw, pri, len(x) / OC_RATE, FC)
+    return judge(m, pw, pri, len(x) / rate, FC)
 
 
-def oc_tx_case(u, pw, pri):
+def oc_tx_case(u, pw, pri, rate=OC_RATE, fmt="sc8"):
     """The bladeRF transmits pulses overclocked; the B200mini measures them."""
-    proto = pulse_train(OC_RATE, pw, pri, 0.5)
+    proto = pulse_train(rate, pw, pri, 0.5)
     iq = np.empty(2 * len(proto), dtype=np.int8)
     iq[0::2] = np.round(np.real(proto) * 127)
     iq[1::2] = np.round(np.imag(proto) * 127)
@@ -287,8 +293,8 @@ def oc_tx_case(u, pw, pri):
 
         def bladerf_tx():
             try:
-                result["out"] = run_stream(["tx", "-f", "sc8", "-c", str(BLADERF_CH), "-O",
-                                            "-r", "%d" % OC_RATE, "-F", "%d" % FC,
+                result["out"] = run_stream(["tx", "-f", fmt, "-c", str(BLADERF_CH), "-O",
+                                            "-r", "%d" % rate, "-F", "%d" % FC,
                                             "-g", str(TX_GAIN), "-i", path, "-t", "9"], 60)
             except Exception as e:      # re-raised below
                 result["error"] = e
@@ -311,7 +317,7 @@ def oc_tx_case(u, pw, pri):
         raise result["error"]
     if m is None:
         raise RuntimeError("no pulses while the bladeRF transmitted (%s)" % last)
-    m.update(case="oc_tx", fs=B200_FS, fc=FC)
+    m.update(case="oc_tx", fs=B200_FS, fc=FC, format=fmt, bladerf_rate=rate)
     return judge(m, pw, pri, len(x) / B200_FS, FC)
 
 
@@ -373,6 +379,8 @@ def main():
     ap.add_argument("--format", default="sc16")
     ap.add_argument("--layout", default="x1")
     ap.add_argument("--rate", type=float, default=61.44e6)
+    ap.add_argument("--oc-rate", type=float, default=OC_RATE)
+    ap.add_argument("--oc-format", choices=["sc8", "sc8meta"], default="sc8")
     a = ap.parse_args()
     if os.environ.get("HWTEST_TX") != "1":
         sys.exit("pulse-check.py transmits: set HWTEST_TX=1 only with the cabling "
@@ -380,9 +388,10 @@ def main():
     u = rf.usrp()
     out = sys.stdout if a.out == "-" else open(a.out, "a")
     if a.mode == "oc-rx":
-        jobs = [(oc_rx_case, (pw, pri)) for pw, pri in OC_RX_CASES]
+        jobs = [(oc_rx_case, (pw, pri, a.oc_rate)) for pw, pri in OC_RX_CASES]
     elif a.mode == "oc-tx":
-        jobs = [(oc_tx_case, (pw, pri)) for pw, pri in OC_TX_CASES]
+        jobs = [(oc_tx_case, (pw, pri, a.oc_rate, a.oc_format))
+                for pw, pri in oc_tx_cases(a.oc_rate)]
     else:
         jobs = [(tx_fmt, (a.format, a.layout, a.rate))]
     fails = 0

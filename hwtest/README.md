@@ -250,6 +250,18 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   margin, not a regression. The
   BIST is switched off at the end (also on SIGTERM); `lib/bist-selftest.c`
   (run by build-host.sh) checks the checker on synthetic data.
+* **rxsched** (phase `sched`) receives the way a recorder of scheduled
+  bursts does: with the FPGA's counter as the source and a meta format, it
+  asks for a 100 ms burst starting 5 ms after the current RX timestamp,
+  writes it to a file, and schedules the next one the same way. The stream
+  runs on between bursts, so the FPGA overruns there and libbladeRF has to
+  skip to the requested timestamp. Every burst must start at its timestamp
+  and arrive complete (no overrun inside it), and the counter shows that
+  every sample is in place: consecutive within the burst, and advanced with
+  the timestamp from burst to burst.
+* `pulse-check.py oc-rx` and `oc-tx` take `--oc-rate` (the overclocked rate,
+  default 122.88 Msps); `oc-tx --oc-format sc8meta` transmits the pulses
+  with metadata (one burst started "now"), as phase `oc` also does.
 * **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
   that no samples arrive in 1 s, fires it and checks that samples then arrive
   and the trigger reports fired. The counter modes bypass the trigger gate,

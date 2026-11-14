@@ -11,6 +11,9 @@
  *   hwtest-stream tx       -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
  *                          (-i FILE | -T TONE_HZ) [-F FREQ] [-g GAIN] [-O]
  *   hwtest-stream trigger  rx [-f FMT] [-r RATE]
+ *   hwtest-stream rxsched  -f sc16meta|sc8meta [-l x1|x2] [-c CH] [-r RATE]
+ *                          [-t SECONDS] [-b BURST_MS] [-L LEAD_MS]
+ *                          [-G GAP_MS] [-o FILE] [-O]
  *   hwtest-stream bist     -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
  *                          [-B prbs|tone] [-o GOLDEN | -i GOLDEN] [-O]
  *
@@ -52,6 +55,19 @@
  *           a rate where learning may fail, such as overclocked). The BIST
  *           is switched off again at the end (and on SIGINT/SIGTERM).
  *
+ * rxsched   the recording pattern of scheduled bursts: with the FPGA's 32-bit
+ *           counter as the source, it asks for a burst of BURST_MS (default
+ *           100) starting LEAD_MS (default 5) after the current RX timestamp,
+ *           reads it, writes it to FILE if given (overwritten each time, as a
+ *           recorder writes its files) and waits GAP_MS, then schedules the
+ *           next burst the same way, for SECONDS. The stream keeps running
+ *           between bursts, so the FPGA overruns there (expected, not
+ *           counted). Every burst must start exactly at its timestamp, arrive
+ *           complete with no overrun inside it, carry consecutive counter
+ *           values (both channels the same for x2), and its counter must have
+ *           advanced with the timestamp since the first burst: the samples
+ *           come from the requested place in the stream.
+ *
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
  * -F sets the carrier of the channels used, -g their gain (RX: manual gain).
@@ -62,6 +78,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
@@ -85,6 +102,7 @@ struct opts {
     bool x2, oversample, have_freq, have_gain, have_tone, bist_tone;
     int ch;                     /* 0 or 1 (x1 only) */
     double rate, seconds, freq, gain, tone, warmup;
+    double burst_ms, lead_ms, gap_ms;  /* rxsched */
     uint64_t nsamples;
     bladerf_rx_mux mux;
 };
@@ -1095,6 +1113,149 @@ static int do_tx(struct bladerf *dev, struct opts *o)
     return 0;
 }
 
+/* --- Scheduled bursts ---------------------------------------------------- */
+
+static int do_rxsched(struct bladerf *dev, struct opts *o)
+{
+    unsigned nc = (unsigned)nch(o);
+    uint64_t per = (uint64_t)llround(o->burst_ms * 1e-3 * o->rate);
+    uint64_t lead = (uint64_t)llround(o->lead_ms * 1e-3 * o->rate);
+    uint64_t total = per * nc, mask = 0, ref_ts = 0, ref_v = 0;
+    uint64_t bursts = 0, bad = 0, past = 0, samples = 0;
+    unsigned reports = 0;
+    struct bladerf_metadata md;
+    double t0, t1, cyc, cyc_max = 0, cyc_sum = 0;
+    bool have_ref = false;
+    char *buf;
+    int rc = 0, status;
+
+    if (!is_meta(o->fmt) || o->mux != BLADERF_RX_MUX_32BIT_COUNTER ||
+        per == 0 || total > UINT_MAX) {
+        fprintf(stderr, "ERROR: rxsched needs a meta format, the 32-bit counter "
+                        "and a burst of 1 to %u samples\n", UINT_MAX);
+        return 2;
+    }
+    buf = malloc(total * sample_bytes(o->fmt));
+    if (buf == NULL) {
+        return 2;
+    }
+    if (setup_channels(dev, o, true, false) != 0) {
+        free(buf);
+        return 2;
+    }
+    CHECK(bladerf_set_loopback(dev, BLADERF_LB_NONE));
+    CHECK(bladerf_set_rx_mux(dev, o->mux));
+    if (sync_config(dev, o, BLADERF_RX) != 0 ||
+        enable_channels(dev, o, BLADERF_RX, true) != 0) {
+        free(buf);
+        return 2;
+    }
+    printf("rxsched: %s, %s, %.3f Msps, %.0f ms bursts (%" PRIu64 " samples per "
+           "channel) %.1f ms ahead, then %s%s%swait %.0f ms, for %.0f s\n",
+           o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
+           o->lead_ms, o->out ? "a write to " : "", o->out ? o->out : "",
+           o->out ? " and " : "", o->gap_ms, o->seconds);
+    t0 = t1 = now();
+    while (now() - t0 < o->seconds) {
+        uint64_t ts_now = 0, ts, j, v0 = 0;
+        bool burst_bad = false;
+        CHECK(bladerf_get_timestamp(dev, BLADERF_RX, &ts_now));
+        ts = ts_now + lead;
+        memset(&md, 0, sizeof(md));
+        md.timestamp = ts;                  /* scheduled, not RX_NOW */
+        status = bladerf_sync_rx(dev, buf, (unsigned)total, &md, TIMEOUT_MS);
+        bursts++;
+        if (status == BLADERF_ERR_TIME_PAST) {
+            past++;
+            bad++;
+            if (reports++ < MAX_REPORTS) {
+                printf("  burst %" PRIu64 ": timestamp 0x%" PRIx64 " already past\n",
+                       bursts, ts);
+            }
+            continue;
+        }
+        if (status != 0) {
+            fprintf(stderr, "ERROR: burst %" PRIu64 ": bladerf_sync_rx: %s\n",
+                    bursts, bladerf_strerror(status));
+            rc = 2;
+            break;
+        }
+        if (md.timestamp != ts || md.actual_count != total ||
+            (md.status & BLADERF_META_STATUS_OVERRUN)) {
+            burst_bad = true;
+            if (reports++ < MAX_REPORTS) {
+                printf("  burst %" PRIu64 ": asked for 0x%" PRIx64 ", got 0x%" PRIx64
+                       ", %u of %" PRIu64 " samples%s\n", bursts, ts,
+                       (uint64_t)md.timestamp, md.actual_count, total,
+                       (md.status & BLADERF_META_STATUS_OVERRUN) ? ", overrun" : "");
+            }
+        }
+        for (j = 0; j < (uint64_t)md.actual_count && !burst_bad; j++) {
+            uint32_t i, q;
+            uint64_t v = 0, js = j / nc;
+            get_iq(o, buf, (size_t)j, &i, &q);
+            v = counter_value(o, i, q, &mask);
+            if (j == 0) {
+                v0 = v;
+                if (!have_ref) {
+                    ref_ts = md.timestamp;
+                    ref_v = v;
+                    have_ref = true;
+                } else if (((v - ref_v) & mask) != ((md.timestamp - ref_ts) & mask)) {
+                    burst_bad = true;
+                    if (reports++ < MAX_REPORTS) {
+                        printf("  burst %" PRIu64 ": counter 0x%" PRIx64 " at timestamp 0x%"
+                               PRIx64 ": %" PRId64 " samples off the timestamp\n",
+                               bursts, v, (uint64_t)md.timestamp,
+                               (int64_t)(((v - ref_v) - (md.timestamp - ref_ts)) & mask));
+                    }
+                }
+            } else if (v != ((v0 + js) & mask)) {
+                burst_bad = true;
+                if (reports++ < MAX_REPORTS) {
+                    printf("  burst %" PRIu64 " sample %" PRIu64 " (slot %u): expected 0x%"
+                           PRIx64 ", got 0x%" PRIx64 "\n", bursts, js,
+                           (unsigned)(j % nc), (v0 + js) & mask, v);
+                }
+            }
+        }
+        if (burst_bad) {
+            bad++;
+        } else {
+            samples += per;
+        }
+        if (o->out != NULL) {
+            FILE *f = fopen(o->out, "wb");
+            if (f == NULL || fwrite(buf, sample_bytes(o->fmt), (size_t)total, f) != total ||
+                fclose(f) != 0) {
+                fprintf(stderr, "ERROR: cannot write %s\n", o->out);
+                rc = 2;
+                break;
+            }
+        }
+        if (o->gap_ms > 0) {
+            usleep((useconds_t)(o->gap_ms * 1e3));
+        }
+        cyc = now() - t1;
+        t1 = now();
+        cyc_sum += cyc;
+        if (cyc > cyc_max) {
+            cyc_max = cyc;
+        }
+    }
+    enable_channels(dev, o, BLADERF_RX, false);
+    free(buf);
+    printf("rxsched: %" PRIu64 " bursts, %" PRIu64 " bad (%" PRIu64 " too late to "
+           "schedule), %" PRIu64 " samples per channel checked; burst cycle %.1f ms "
+           "mean, %.1f ms max\n", bursts, bad, past, samples,
+           bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
+    if (rc == 0 && (bad != 0 || bursts == 0)) {
+        rc = 1;
+    }
+    printf("RESULT: %s\n", rc == 0 ? "PASS" : "FAIL");
+    return rc;
+}
+
 /* --- Triggers ------------------------------------------------------------ */
 
 struct rxwait {
@@ -1715,10 +1876,11 @@ out:
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: hwtest-stream probe|rxcheck|loopback|rxcap|tx|bist|trigger [rx|tx]\n"
+            "usage: hwtest-stream probe|rxcheck|loopback|rxcap|tx|bist|rxsched|trigger [rx|tx]\n"
             "  -f FMT (sc16 sc16meta sc8 sc8meta packed)  -l x1|x2  -c 1|2\n"
             "  -r RATE  -t SECONDS  -n SAMPLES  -m MUX  -F FREQ  -g GAIN  -O\n"
             "  -o FILE  -i FILE  -T TONE_HZ  -W WARMUP_S  -B prbs|tone  -d DEVICE\n"
+            "  -b BURST_MS  -L LEAD_MS  -G GAP_MS (rxsched)\n"
             "  -v (verbose)\n");
 }
 
@@ -1726,6 +1888,7 @@ int main(int argc, char **argv)
 {
     struct opts o = { .fmt = BLADERF_FORMAT_SC16_Q11, .fmt_name = "sc16",
                       .rate = 30.72e6, .seconds = 10, .warmup = 0.25,
+                      .burst_ms = 100, .lead_ms = 5,
                       .mux = BLADERF_RX_MUX_32BIT_COUNTER, .mux_name = "counter32" };
     struct bladerf *dev;
     int c, rc;
@@ -1741,7 +1904,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -1771,6 +1934,9 @@ int main(int argc, char **argv)
             case 'd': o.dev = optarg; break;
             case 'v': bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG); break;
             case 'W': o.warmup = atof(optarg); break;
+            case 'b': o.burst_ms = atof(optarg); break;
+            case 'L': o.lead_ms = atof(optarg); break;
+            case 'G': o.gap_ms = atof(optarg); break;
             case 'B':
                 if (strcmp(optarg, "tone") != 0 && strcmp(optarg, "prbs") != 0) {
                     usage();
@@ -1803,6 +1969,8 @@ int main(int argc, char **argv)
         rc = do_trigger(dev, &o);
     } else if (strcmp(o.mode, "bist") == 0) {
         rc = do_bist(dev, &o);
+    } else if (strcmp(o.mode, "rxsched") == 0) {
+        rc = do_rxsched(dev, &o);
     } else {
         usage();
         rc = 2;
