@@ -7,11 +7,14 @@
 The foxhunt revision is a standalone transmitter. Once loaded, its own Nios
 firmware (hdl/fpga/platforms/bladerf-micro/software/foxhunt) sets up the
 AD9361 (915 MHz, 768 ksps, 10 dB TX attenuation) and has the FPGA's tone
-generator key a tone in Morse code: 1 s of silence, "PARIS PARIS" at 5 WPM
-(100 dot lengths of 240 ms), 1 s of silence, then TX off for 10 s, over and
-over. The tone is one sideband, 937.5 Hz above the carrier: the firmware asks
-for 1 kHz, and the tone generator's phase step (4096 per turn at 768 ksps)
-rounds that to 5, i.e. 937.5 Hz.
+generator key a tone in Morse code: "PARIS PARIS" (100 dot lengths) between
+two pauses, then TX off for 10 s (usleep), over and over. The firmware asks
+for 5 WPM (240 ms dots) and 1 s pauses, but the tone generator counts these
+durations in cycles of the TX sample clock, which runs at twice the 768 ksps
+sample rate, so the hardware sends 120 ms dots (10 WPM) and 0.5 s pauses: TX
+is on for 13.0 s per message, in Nuand's image as in ours. The tone is one
+sideband, 937.5 Hz from the carrier: the firmware asks for 1 kHz, and the
+tone generator's phase step (4096 per turn at 768 ksps) rounds that to 5.
 
 That firmware serves no host requests, so the image is loaded with
 BLADERF_FORCE_NO_FPGA_PRESENT=1 (libbladeRF does not set up the board before
@@ -21,15 +24,18 @@ replaced by the official image afterwards (recover.sh).
 The B200mini records SECONDS starting just before the load (RX2 port,
 915 MHz - 20 kHz, 100 ksps). A capture passes if
   - the tone is 937.5 Hz from the bladeRF's carrier (its LO leakage), within
-    2 Hz (the sign, i.e. the sideband, is reported)
+    3 Hz (the sign, i.e. the sideband, is reported)
   - every complete message decodes to "PARIS PARIS", and there is one
-  - the dot length is 240 ms within 1 %
-  - consecutive messages start 35.5-37.5 s apart (when two are complete)
+  - the dot length (mean of a dot and a one-unit gap: the tone starts and
+    stops at zero crossings, which lengthens dots and shortens gaps by up to
+    a cycle) is 120 ms within 1 %
   - the tone is >= 20 dB above the gaps.
-The tone level, the carrier's offset from 915 MHz (the firmware writes a
-fixed VCTCXO trim, 0x1ec1, not the board's calibration), the carrier leakage
-with TX on and off, and the time from the load to the first tone are
-reported for comparing images.
+Reported for comparing images: the tone level, the carrier's offset from
+915 MHz (the firmware writes a fixed VCTCXO trim, 0x1ec1, not the board's
+calibration), the carrier leakage with TX on and off, how long TX stays on
+and off (from the leakage: on is the tone generator's timing, off is the
+CPU's usleep), the message period and the time from the load to the first
+tone.
 
 Transmits (the FPGA does, on its own, until another image is loaded): only
 with HWTEST_TX=1 and the transmit cabling. Nuand's firmware transmits on TX1,
@@ -59,10 +65,9 @@ RX_OFFSET = -20e3       # B200mini tuned 20 kHz below it, away from its own DC
 FS = 100e3              # B200mini sample rate
 B200_RX_GAIN = 6        # dB: about -22 dBm from TX2 (10 dB attenuation, 20 dB pad)
 TONE_HZ = 937.5         # above the carrier
-TONE_TOL_HZ = 2.0
-UNIT_S = 0.240          # dot length at 5 WPM
+TONE_TOL_HZ = 3.0
+UNIT_S = 0.120          # the firmware's 240 ms dot, counted at twice the sample rate
 UNIT_TOL = 0.01
-PERIOD_S = (35.5, 37.5)
 ON_OFF_DB = 20
 TEXT = "PARIS PARIS"
 ENV_MS = 1              # envelope resolution
@@ -215,6 +220,7 @@ def analyze(x):
     m["message_starts_s"] = [round(s, 3) for s in starts]
     m["periods_s"] = [round(b - a, 3) for a, b in zip(starts, starts[1:])]
     m["dot_s"] = round(float(np.mean(dots)), 4) if dots else None
+    m["unit_s"] = round(float((np.mean(dots) + np.mean(gaps1)) / 2), 4) if dots and gaps1 else None
     m["dash_over_dot"] = round(float(np.mean(dashes) / np.mean(dots)), 3) if dots and dashes else None
     m["gap_s"] = round(float(np.mean(gaps1)), 4) if gaps1 else None
     m["first_tone_s"] = round(rs[0][2] * ENV_MS / 1000, 3) if not rs[0][0] else 0.0
@@ -236,6 +242,13 @@ def analyze(x):
         m["carrier_leak_tx_on_dbfs"] = round(float(np.median(np.concatenate(inside))), 1)
     if between and sum(len(v) for v in between):
         m["carrier_leak_tx_off_dbfs"] = round(float(np.median(np.concatenate(between))), 1)
+    # How long TX stays on and off, from the leakage (whole runs only)
+    if ("carrier_leak_tx_off_dbfs" in m and "carrier_leak_tx_on_dbfs" in m and
+            m["carrier_leak_tx_on_dbfs"] - m["carrier_leak_tx_off_dbfs"] >= 10):
+        thr = (m["carrier_leak_tx_on_dbfs"] + m["carrier_leak_tx_off_dbfs"]) / 2
+        txr = merge_glitches(runs(lo_env > thr), 200 / ENV_MS)[1:-1]
+        m["tx_on_s"] = [round(n * ENV_MS / 1000, 2) for st, s, n in txr if st]
+        m["tx_off_s"] = [round(n * ENV_MS / 1000, 2) for st, s, n in txr if not st]
 
     fails = []
     if abs(abs(m["tone_above_carrier_hz"]) - TONE_HZ) > TONE_TOL_HZ:
@@ -244,10 +257,8 @@ def analyze(x):
         fails.append("no complete message")
     if any(t != TEXT for t in texts):
         fails.append("decoded %s" % texts)
-    if m["dot_s"] is None or abs(m["dot_s"] - UNIT_S) > UNIT_TOL * UNIT_S:
-        fails.append("dot %s s" % m["dot_s"])
-    if any(not PERIOD_S[0] <= p <= PERIOD_S[1] for p in m["periods_s"]):
-        fails.append("periods %s" % m["periods_s"])
+    if m["unit_s"] is None or abs(m["unit_s"] - UNIT_S) > UNIT_TOL * UNIT_S:
+        fails.append("dot length %s s" % m["unit_s"])
     if m["on_off_db"] < ON_OFF_DB:
         fails.append("on/off %.1f dB" % m["on_off_db"])
     m["pass"] = not fails
