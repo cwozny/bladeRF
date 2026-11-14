@@ -161,25 +161,22 @@ def measure_pulses(x, fs, smooth_s):
         raise RuntimeError("only %d pulses found" % len(rises))
     pw = (falls - rises) / fs
     pri = np.diff(rises) / fs
-    # carrier: the strongest spectral line of the capture with the gaps
-    # zeroed (a phase-step estimate is pulled off by images and spurs)
-    core = s.astype(bool) & np.roll(s.astype(bool), 2 * w) & np.roll(s.astype(bool), -2 * w)
-    n = 1 << int(np.floor(np.log2(len(x))))
-    g = (x[:n] * core[:n]).astype(np.complex64)
-    spec = np.abs(np.fft.fft(g))
-    f = np.fft.fftfreq(n, 1 / fs)
-    near = np.nonzero(np.abs(f - F_OFF) < 1e6)[0]
-    i = int(near[np.argmax(spec[near])])
-    if 0 < i < n - 1:     # parabolic interpolation between bins
-        a0, a1, a2 = np.log(spec[i - 1] + 1e-12), np.log(spec[i] + 1e-12), np.log(spec[i + 1] + 1e-12)
-        den = a0 - 2 * a1 + a2
-        frac = 0.5 * (a0 - a2) / den if den != 0 else 0.0
-    else:
-        frac = 0.0
+    # carrier: the mean phase step inside the pulses of the mixed-down,
+    # smoothed signal (lag-1 autocorrelation over every pulse), unambiguous
+    # within +-fs/2; the smoothing keeps images and spurs out. (The strongest
+    # spectral line is not reliable: a pulse train's lines are a PRF apart and
+    # neighbouring lines differ by only sinc(PW/PRI), 1.6 % at 10 % duty.)
+    on_s = s.astype(bool)
+    core = on_s & np.roll(on_s, 2 * w) & np.roll(on_s, -2 * w)
+    cm = core[1:] & core[:-1]
+    if not cm.any():
+        raise RuntimeError("pulses too short to measure the carrier")
+    r = np.sum(bb[1:][cm].astype(np.complex128) * np.conj(bb[:-1][cm].astype(np.complex128)))
+    freq = F_OFF + float(np.angle(r)) * fs / (2 * np.pi)
     return {
         "pulses": int(len(rises)),
         "pw": pw, "pri": pri,
-        "freq_hz": float(f[i] + frac * fs / n),
+        "freq_hz": freq,
         "on_dbfs": float(20 * np.log10(a_on + 1e-12)),
         "on_off_db": float(20 * np.log10((a_on + 1e-12) / (a_off + 1e-12))),
     }
