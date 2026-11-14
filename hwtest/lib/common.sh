@@ -34,8 +34,9 @@ log()  { echo "[$(date +%H:%M:%S)] $*" >&2; }
 die()  { log "ERROR: $*"; exit 1; }
 
 # Transmitting is opt-in. Unless HWTEST_TX=1 declares that every bladeRF TX
-# port is cabled through >= 30 dB into a receiver or terminated in 50 ohms
-# (see README.md), antennas may be attached and nothing may transmit: the
+# port is cabled through >= 20 dB into a receiver or terminated in 50 ohms,
+# with no antennas (see README.md; the TX cap below is what makes 20 dB
+# enough), antennas may be attached and nothing may transmit: the
 # no-TX guard is preloaded into every program the harness runs (it refuses
 # to enable TX channels in libbladeRF), bladerf-cli-safe refuses TX commands,
 # and run-suite.sh runs receive-only tests.

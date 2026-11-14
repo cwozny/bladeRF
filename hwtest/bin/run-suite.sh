@@ -154,12 +154,20 @@ scheduled_retune_rx() {     # scheduled_retune_rx <test name>
 # Nuand's libbladeRF the end of the transmit switches both RX channels off in
 # host tuning mode, and FPGA tuning mode cannot receive on both channels at
 # all (README.md), so this needs HWTEST_FIXES=1 (and HWTEST_TX=1).
+# It runs last in its phase, after an image load, and sets the RX mux and
+# the loopback first: the FPGA keeps its RX mux setting after the program
+# that set it exits (libbladeRF's open does not reset it), and
+# digital_loopback_fpga leaves it at DIGITAL_LOOPBACK, which feeds the TX
+# samples to the receive. And a transmit by another program makes the next
+# digital_loopback_rfic fail (README.md). bladeRF-cli exits 0 even when the
+# receive times out, hence the checker.
 RX2_N=30000000      # bladeRF-cli counts the samples of both channels
 rx2_txtoggle() {    # rx2_txtoggle <test name>
     local tx="$out/scratch/tx-zeros.bin"
     head -c $((1000000 * 4)) /dev/zero > "$tx"
     rm -f "$out/scratch/rx2.bin"
     runtest "$1" 120 @check_rx2_complete "$BCLI" \
+        -e "set loopback none" -e "set rx_mux baseband" \
         -e "set frequency rx 915M" -e "set frequency tx 920M" \
         -e "set samplerate rx 5M" -e "set samplerate tx 5M" -e "set gain tx1 0" \
         -e "rx config file=$out/scratch/rx2.bin format=bin n=$RX2_N channel=1,2 timeout=3000" \
@@ -232,9 +240,6 @@ common_tests() {
             "$T/libbladeRF_test_timestamps" -t tx_onoff_nowsched -f
         runtest "digital_loopback_fw-$m" 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l fw -c 100
         runtest "digital_loopback_fpga-$m" 300 @check_iq_matches "$T/libbladeRF_test_digital_loopback" -l fpga -c 100
-        if fixes_ok; then
-            rx2_txtoggle "rx2_txtoggle-$m"
-        fi
     fi
     runtest "unused_sync-$m" 120 - "$T/libbladeRF_test_unused_sync"
 }
@@ -267,6 +272,9 @@ for phase in "${phases[@]}"; do
         # reload the image afterwards
         runtest peripheral_timing 600 - "$T/libbladeRF_test_peripheral_timing"
         load_image after-peripheral-timing
+        if tx_ok && fixes_ok; then
+            rx2_txtoggle rx2_txtoggle-host
+        fi
         unset BLADERF_DEFAULT_TUNING_MODE
         ;;
     fpga)
@@ -277,6 +285,9 @@ for phase in "${phases[@]}"; do
         # Loads the image through libbladeRF on an open device, twice, and
         # sets the sample rate through the Nios
         runtest fpga_load 300 - "$T/libbladeRF_test_fpga_load" -d "*" -f "$image"
+        if tx_ok && fixes_ok; then
+            rx2_txtoggle rx2_txtoggle-fpga
+        fi
         unset BLADERF_DEFAULT_TUNING_MODE
         ;;
     deep)
