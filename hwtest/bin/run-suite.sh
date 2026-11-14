@@ -422,35 +422,33 @@ for phase in "${phases[@]}"; do
         # the RX data port (hwtest-stream bist), so every sample crosses the
         # AD9361-to-FPGA LVDS interface with a known value: the xA5's one
         # timing path with negative setup slack (Nuand's image -0.154 ns,
-        # the Nios V build -0.110 ns) is the capture of that interface.
+        # the Nios V build -0.110 ns) is the capture of that interface. The
+        # AD9361 sends both channels over it whichever are streamed (2R2T
+        # framing: four DATA_CLK cycles per sample, see
+        # axi_ad9361_dev_if_alt.v), so its clock is 4 x the sample rate.
         # Host tuning mode only (in FPGA tuning mode the AD9361's state
         # outlives the program); the image is reloaded afterwards.
-        #  - bist_prbs: the PRBS at 61.44 Msps on each channel (SC16) and on
-        #    both (30.72 Msps, the most two channels of SC16 carry over USB)
+        #  - bist_prbs: the PRBS at 61.44 Msps (interface clock 245.76 MHz)
+        #    on each channel (SC16) and on both (SC16 at 30.72 Msps, the most
+        #    two channels of SC16 carry over USB; SC8 at 61.44 Msps)
         #  - bist_tone: the BIST tone instead (a different bit pattern)
-        #  - bist_prbs_sc8: SC8 at 61.44 Msps, saving the golden period
-        #  - bist_oc: overclocked (122.88 Msps, SC8), learning the pattern
-        #    afresh (it may come out framed differently: libbladeRF's
-        #    overclocking is a set of undocumented AD9361 register writes,
-        #    the FPGA does nothing different) and against the golden period
+        #  - bist_oc: overclocked (BLADERF_FEATURE_OVERSAMPLE, SC8) at
+        #    76.8 Msps (307.2 MHz) on each channel, which delivered the
+        #    pattern intact with every image, and at 122.88 Msps (491.52 MHz),
+        #    which delivered garbage with every image, Nuand's included: that
+        #    case fails everywhere and documents the limit (README.md, bist)
         load_image bist
         export BLADERF_DEFAULT_TUNING_MODE=host
         bs=$((${BIST_MIN:-2} * 60))
         runtest bist_prbs_sc16_rx1-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -c 1 -r 61.44M -t "$bs"
         runtest bist_prbs_sc16_rx2-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -c 2 -r 61.44M -t "$bs"
         runtest bist_prbs_sc16_x2-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -l x2 -r 30.72M -t "$bs"
+        runtest bist_prbs_sc8_x2-host 120 - "$T/hwtest-stream" bist -f sc8 -l x2 -r 61.44M -t 20
         runtest bist_tone_sc16_rx1-host 120 - "$T/hwtest-stream" bist -f sc16 -c 1 -r 61.44M -B tone -t 20
         for c in 1 2; do
-            runtest "bist_prbs_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -r 61.44M -t 20 \
-                -o "$out/scratch/bist-gold-sc8-rx$c.bin"
+            runtest "bist_oc_76M8_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -O -r 76.8M -t 20
         done
-        for c in 1 2; do
-            gold="$out/scratch/bist-gold-sc8-rx$c.bin"
-            runtest "bist_oc_learn_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -O -r 122.88M -t 20
-            if [ -f "$gold" ]; then
-                runtest "bist_oc_gold_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -O -r 122.88M -t 20 -i "$gold"
-            fi
-        done
+        runtest bist_oc_122M88_sc8_rx1-host 120 - "$T/hwtest-stream" bist -f sc8 -c 1 -O -r 122.88M -t 20
         unset BLADERF_DEFAULT_TUNING_MODE
         load_image after-bist
         ;;

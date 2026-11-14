@@ -206,42 +206,47 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   resynchronises by reading the 8-bit samples as 16-bit words and reported 94 %
   matches at 61.44 Msps. The harness uses its own pattern.
 * **Overclocking** (`bladerf_enable_feature(BLADERF_FEATURE_OVERSAMPLE)`,
-  122.88 Msps, 8-bit only): Nuand's `test_oversample` (both RX channels) only
-  checks the time a 1 s capture takes, the power and that samples are not
-  stuck at zero. The counter check at 122.88 Msps tests the FPGA and USB at
-  that rate; `pulse-check.py oc-rx` and `oc-tx` send pulse trains both ways
-  (pulse widths 1, 10 and 100 us, repetition intervals 10, 100 and 1000 us)
-  and check every pulse width and interval against what was sent, which also
-  proves the sample rate. With the official image on this board the
-  overclocked samples are corrupted in both directions: with nothing
-  connected the 8-bit RX samples spread over ±76 LSB (I) with 4 % at full
-  scale, against ±0.5 LSB at 61.44 Msps, and the B200mini sees no pulses in
-  the bladeRF's overclocked output. The counter path is fine at 122.88 Msps,
-  so the FPGA's data path and USB keep up; the corruption points at the
-  AD9361 or its data interface at the overclocked rate (on the xA5 that
-  interface's receive clock is also the design's one failing timing path, in
-  Nuand's build as in ours).
+  up to 122.88 Msps, 8-bit only): Nuand's `test_oversample` (both RX
+  channels) only checks the time a 1 s capture takes, the power and that
+  samples are not stuck at zero. The counter check at 122.88 Msps tests the
+  FPGA and USB at that rate; `pulse-check.py oc-rx` and `oc-tx` send pulse
+  trains both ways (pulse widths 1, 10 and 100 us, repetition intervals 10,
+  100 and 1000 us) and check every pulse width and interval against what was
+  sent, which also proves the sample rate. On this board the overclocked
+  receive samples are corrupted with every image, the official one included:
+  with nothing transmitted to it the 8-bit samples spread over about ±75 LSB
+  (I) with 3 to 11 % at full scale, against ±0.5 LSB at 61.44 Msps (the same in
+  captures made with Nuand's bladeRF-cli), so the pulses from the B200mini
+  cannot be found. The bist phase below shows where. In the transmit
+  direction the B200mini finds every pulse, with the right width and
+  interval.
 * **bist** has the AD9361 replace its received samples with its built-in
   test pattern (BIST) at its RX data port: register 0x3F4 = 0x09 injects the
   PRBS, 0x0B a tone at fs/32 (the values the AD9361 no-OS driver's
   `ad9361_bist_prbs()` and `ad9361_bist_tone()` write; libbladeRF has no
   BIST call, so it uses `bladerf_set_rfic_register`). Every sample then
   crosses the AD9361-to-FPGA LVDS interface, and nothing else, with a known
-  value: the pattern repeats, so hwtest-stream learns its period and one
-  golden period (voted over 15 repeats) from the first 2^24 samples per
-  channel, restarts the stream, finds the phase and checks every later
-  sample, counting errors per bit of I and Q. A run of 256 bad samples
-  (lost samples, or garbage) makes it look for the phase again, and fails.
-  Overclocked (122.88 Msps, SC8), the phase both learns the pattern afresh
-  and checks it against the golden period learnt at 61.44 Msps in SC8 (`-o`
-  saves it, `-i` uses it): libbladeRF's overclocking is a set of
-  undocumented AD9361 register writes (the FPGA does nothing different), so
-  the pattern may come out framed differently, and garbage cannot be
-  learnt. On
-  the xA5 the capture of this interface is the design's one timing path
-  with negative setup slack, so this is the direct check of it. The BIST is
-  switched off at the end (also on SIGTERM); `lib/bist-selftest.c` (run by
-  build-host.sh) checks the checker on synthetic data.
+  value: the pattern repeats (the PRBS every 65,535 samples), so
+  hwtest-stream learns its period and one golden period (voted over 15
+  repeats) from the first 2^24 samples per channel, restarts the stream,
+  finds the phase and checks every later sample, counting errors per bit of
+  I and Q. A run of 256 bad samples (lost samples, or garbage) makes it look
+  for the phase again, and fails. `-o` saves the golden period and `-i`
+  checks against a saved one instead of learning it (e.g. overclocked
+  against one learnt at 61.44 Msps). On the xA5 the capture of this
+  interface is the design's one timing path with negative setup slack, so
+  this is the direct check of it. The AD9361 sends both channels over the
+  interface whichever are streamed (2R2T framing, four DATA_CLK cycles per
+  sample: `axi_ad9361_dev_if_alt.v`), so its clock is four times the sample
+  rate: 245.76 MHz at 61.44 Msps, within the 250 MHz that bladerf.sdc and
+  the LVDS receiver (altlvds_rx, 500 Mbps per lane) are set up for.
+  libbladeRF's overclocking is a set of undocumented AD9361 register writes;
+  the FPGA does nothing different. With it the pattern arrived intact up to
+  76.8 Msps (307.2 MHz) and as garbage from 92.16 Msps on (no repeat in 2^24
+  samples, and no match with the golden period anywhere), the same with
+  Nuand's image and the rebuilds; the phase runs 76.8 and 122.88 Msps. The
+  BIST is switched off at the end (also on SIGTERM); `lib/bist-selftest.c`
+  (run by build-host.sh) checks the checker on synthetic data.
 * **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
   that no samples arrive in 1 s, fires it and checks that samples then arrive
   and the trigger reports fired. The counter modes bypass the trigger gate,
