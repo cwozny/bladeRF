@@ -1131,13 +1131,14 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     double wr_t, wr_sum = 0, wr_max = 0;
     uint64_t ts_lat_slow = 0, nrx = 0, nwr = 0;
     /* The pause between two reads (file write, gap, timestamp read): the
-     * stream keeps running, so a pause longer than libbladeRF's buffers hold
-     * is an overrun, after which libbladeRF's RX worker drops another
-     * NUM_TRANSFERS - 1 transfers even once buffers are free again
-     * (sync_worker.c, resubmit_count); a read scheduled closer than that is
-     * "already past" when the drop outlasts the lead. */
+     * stream keeps running, and once the buffers not in flight are full
+     * (sync_worker.c's RX callback finds the next one not empty) every
+     * transfer is dropped, in runs of NUM_TRANSFERS (resubmit_count) that
+     * carry on even after the read frees buffers. A read scheduled closer
+     * than the rest of such a run is "already past". */
     double xfer_s = (double)buffer_samples(o->fmt) / (o->rate * nc);
-    double buf_s = NUM_BUFFERS * xfer_s, drop_s = (NUM_TRANSFERS - 1) * xfer_s;
+    double buf_s = (NUM_BUFFERS - NUM_TRANSFERS) * xfer_s;
+    double drop_s = (NUM_TRANSFERS - 1) * xfer_s;
     double t_rx_end = 0, pause = 0, pause_max = 0;
     uint64_t long_pauses = 0, past_after_long = 0;
     bool have_ref = false;
@@ -1170,9 +1171,9 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
            o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
            o->lead_ms, o->out ? "a write to " : "", o->out ? o->out : "",
            o->out ? " and " : "", o->gap_ms, o->seconds);
-    printf("rxsched: libbladeRF's %u buffers hold %.1f ms; after an overrun its RX worker "
-           "drops %.1f ms more (%u transfers)\n", NUM_BUFFERS, 1e3 * buf_s, 1e3 * drop_s,
-           NUM_TRANSFERS - 1);
+    printf("rxsched: libbladeRF's buffers fill in %.1f ms (%u, %u in flight); after an "
+           "overrun its RX worker drops up to %.1f ms more\n", 1e3 * buf_s, NUM_BUFFERS,
+           NUM_TRANSFERS, 1e3 * drop_s);
     t0 = t1 = now();
     while (now() - t0 < o->seconds) {
         uint64_t ts_now = 0, ts, j, v0 = 0;
@@ -1313,7 +1314,7 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
            nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
            nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
     printf("rxsched: pauses between reads %.1f ms max, %" PRIu64 " longer than the "
-           "%.1f ms the buffers hold; %" PRIu64 " of the %" PRIu64 " too late followed "
+           "%.1f ms the buffers last; %" PRIu64 " of the %" PRIu64 " too late followed "
            "one\n", 1e3 * pause_max, long_pauses, 1e3 * buf_s, past_after_long, past);
     if (rc == 0 && (bad != 0 || bursts == 0)) {
         rc = 1;
