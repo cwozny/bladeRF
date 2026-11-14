@@ -89,6 +89,11 @@ phases (details in run-suite.sh):
   evaluation time-out).
 - **formats, oc, trigger, fullsoak:** see "Sample formats, overclocking,
   triggers, full-rate soak" below.
+- **bist:** the AD9361's built-in test pattern (PRBS, or a tone) replaces the
+  received samples at its RX data port, so every sample crosses only the
+  AD9361-to-FPGA LVDS interface (the xA5's one failing timing path) with a
+  known value; every sample and bit is checked, at 61.44 Msps on each channel
+  and with two channels, and overclocked (README.md, "bist").
 
 ## Results
 
@@ -104,8 +109,20 @@ image B.
 | Image | Logic | RAM blocks | Worst setup slack | Worst hold slack |
 |---|---|---|---|---|
 | hostedxA4 | 7,845 ALMs (42 %) | 273 / 308 (89 %) | +0.540 ns | +0.039 ns |
-| hostedxA5 (C) | 7,868 ALMs | | −0.110 ns | +0.058 ns |
+| hostedxA5 (C) | 7,868 ALMs (27 %) | 273 / 446 (61 %) | −0.110 ns | +0.058 ns |
 | hostedxA9 | 7,833 ALMs (7 %) | 273 / 1,220 (22 %) | +0.523 ns | +0.066 ns |
+| for comparison: hostedxA5 v0.16.0, Nios II/e, Quartus 23.1.1 (A; B is the same) | 6,757 ALMs (23 %) | 274 / 446 (61 %) | −0.154 ns | |
+
+The Nios V/m takes 1,111 more ALMs (and 1,778 more registers) than the
+Nios II/e on the xA5. B's fit and timing are identical to A's (same Fmax for
+every clock).
+
+The FPGA's whole RX/TX sample logic (FIFOs, metadata, loopback) runs on the
+LVDS receiver's slow clock (`ad9361.clock`, `pll_sclk`): half the AD9361's
+DATA_CLK, so 122.88 MHz at 61.44 Msps, constrained to 125 MHz. Its Fmax in
+the slow 85 °C model: A and B 133.33 MHz, C 126.18 MHz (both meet the
+constraint; the negative slack above is on a path into that domain from
+another clock, which the Fmax summary leaves out).
 
 - The xA5's only failing path is the AD9361 RX LVDS clock; Nuand's own xA5
   build (A, reproduced) fails the same path by 0.154 ns.
@@ -240,7 +257,8 @@ those rates, but not the sample clock.
   ±76.7 LSB (I) with 5.1–5.5 % at full scale on all three images (±0.5 LSB at
   61.44 Msps), so the pulses cannot be found. The same on A, B and C: the
   corruption is not caused by the changes. Nuand's test_oversample passes
-  anyway (it checks timing, power and stuck samples).
+  anyway (it checks timing, power and stuck samples). Section 8 shows that
+  the AD9361-to-FPGA interface itself fails at this rate.
 - **TX:** the B200mini finds every pulse, with the right width and interval
   on all three images (e.g. 1 µs / 10 µs sent: 1.019–1.022 µs / 10.002 µs
   measured, 24,995–24,996 pulses of 24,996; PRI within 1 ppm). The cases
@@ -267,10 +285,90 @@ tuning modes; no samples while armed, first samples 4.1–4.6 ms after firing.
 | Image | RX counter, SC16, 61.44 Msps, 60 min | Loopback, SC16, set to 30.72 Msps, 30 min |
 |---|---|---|
 | C | pass: 221,183,311,872 samples, none missing, duplicated or late | pass: 73,730,588,672 samples back (at 40.96 Msps, see above), 0 errors |
-| A | (running) | |
-| B | (to come) | |
+| A | pass: 221,183,852,544 samples, none missing, duplicated or late | **fail:** stopped after 67 s (2,749,104,128 samples back, 0 errors), then RX and TX transfers timed out |
+| B | pass: 221,183,754,240 samples, none missing, duplicated or late | pass: 73,729,507,328 samples back, 0 errors |
 
-(Re-run with 0c7f2915, the overclock repeats and the BIST checks: to come.)
+A's loopback stopped moving samples in both directions at once, 67 s into
+the run, with no USB error in the kernel log (`journalctl -k`: only the
+resets at each open) and nothing else running on the host; every sample
+before that was correct. On Nuand's image, so not a regression, but an
+intermittent stall of unknown cause; repeated below.
+
+(Re-run with the current harness, the overclock repeats and the loopback
+soak repeats: section 9, to come.)
+
+### 8. The AD9361-to-FPGA LVDS interface with the AD9361's BIST (2026-11-14 morning)
+
+`hwtest-stream bist` (README.md, "bist"): the AD9361 replaces its received
+samples with its test pattern (a PRBS repeating every 65,535 samples, or a
+tone) at its RX data port, so every sample crosses only the LVDS interface,
+whose capture is the xA5's one timing path with negative setup slack
+(section 2), and every sample and bit is checked. Receive only, host tuning
+mode. The AD9361 sends both channels over the interface whichever are
+streamed (2R2T framing: four DATA_CLK cycles per sample, see
+`axi_ad9361_dev_if_alt.v`), so the interface clock is four times the sample
+rate: 245.76 MHz at 61.44 Msps, where bladerf.sdc and the LVDS receiver
+(altlvds_rx: 250 MHz, 500 Mbps per lane) are set up for 250 MHz.
+
+**First runs** (`diag-bist/1114-0533`, A and C, harness 00e2b143), all pass
+on both images with no bad sample:
+
+| Case | Samples checked per channel |
+|---|---|
+| PRBS, SC16 (all 12 bits), RX1 and RX2, 61.44 Msps, 10 s each | 631,177,216 |
+| tone, SC16, RX1, 61.44 Msps, 5 s | 323,977,216 |
+| PRBS, SC8 (bits 11–4), RX1 + RX2 together, 61.44 Msps, 10 s | 631,177,216 |
+| PRBS, SC8, RX1, 61.44 Msps, 5 s | 323,977,216 |
+
+**Overclocking** (libbladeRF's `BLADERF_FEATURE_OVERSAMPLE`, SC8, RX1, 5 s
+per rate; `diag-bist/oc-sweep-1114-0538`, `diag-bist/oc-fine-1114-0543`).
+libbladeRF sets the AD9361 to half the rate and doubles it with undocumented
+register writes; the FPGA does nothing different:
+
+| Rate (interface clock) | A | B | C |
+|---|---|---|---|
+| 10, 30.72, 61.44 Msps, with and without the feature | pass | | pass |
+| 76.8 Msps (307.2 MHz) | pass (400,785,408 samples) | | pass |
+| 78 Msps (312 MHz) | 8,665 bad (2.1e-5) | 8 bad (2.0e-8) | 9 bad (2.2e-8) |
+| 80 Msps (320 MHz) | 4,275 bad (1.0e-5) | 504,719 bad (1.2e-3) | 3,790 bad (9.1e-6) |
+| 82 Msps (328 MHz) | 1.4 % bad | garbage | 633,370 bad (1.5e-3) |
+| 84 Msps (336 MHz) | 1.3 % bad | garbage | garbage |
+| 86 to 122.88 Msps (344 to 491.52 MHz) | garbage | garbage | garbage |
+
+"Garbage": no repeat of the pattern in 2^24 samples; at 122.88 Msps the
+samples also matched the pattern learnt at 61.44 Msps nowhere, and the tone
+did not repeat either. Every bad sample up to 84 Msps had the same single
+bit wrong: bit 7 of the 12-bit sample (bit 3 of SC8), in I and in Q, on all
+three images: the first thing to fail is one data lane, the same with all
+three builds, which points at the board or the IO cells rather than at
+anything the fitter placed differently. With the feature at 61.44 Msps the PRBS (RX1 and
+RX2) and the tone pass, so libbladeRF's register writes are not the problem:
+the rate is.
+
+- So overclocked receive at 122.88 Msps cannot work on this board with any
+  image: the interface would need 491.52 MHz and delivers errors from about
+  312 MHz. This explains the corrupted overclocked samples in section 7.
+- The interface keeps its margin with the Nios V build: at room temperature
+  it carries the pattern intact at 1.25 times its design rate (76.8 Msps) on
+  A and C alike, and A, B and C start to fail at the same point. The negative
+  slack (−0.154 ns in Nuand's build, −0.110 ns in C) is for the slow 85 °C
+  model; one board at room temperature cannot show what happens at the
+  corners.
+
+**Cross-check with Nuand's bladeRF-cli** (`diag-oc-cli/1114-0535`; none of
+the harness's streaming code; RX at 915 MHz, gain 10 dB, nothing
+transmitted; the first 1 M samples skipped):
+
+| Capture | I std | Q std | at full scale |
+|---|---|---|---|
+| A, RX1 / RX2, 8-bit, 61.44 Msps | 0.55 / 0.52 LSB | 0.51 / 0.50 LSB | 0 % |
+| A, RX1 / RX2, `set feature oversample`, 122.88 Msps | 74.0 / 76.9 LSB | 38.3 / 41.5 LSB | 2.8 / 10.9 % |
+| C, RX1 / RX2, 8-bit, 61.44 Msps | 0.55 / 0.52 LSB | 0.51 / 0.50 LSB | 0 % |
+| C, RX1 / RX2, `set feature oversample`, 122.88 Msps | 74.1 / 76.8 LSB | 39.0 / 41.6 LSB | 2.7 / 11.0 % |
+
+The same corruption as with the harness, on Nuand's image as on C.
+
+(BIST campaign on A, B and C, with 10-minute runs on C and A: to come.)
 
 ## Evidence per change
 
