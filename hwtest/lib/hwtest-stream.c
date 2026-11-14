@@ -71,7 +71,9 @@
  *           to back with no timestamp read, as recorders that keep the stream
  *           running do: each burst must start where the previous one ended,
  *           unless libbladeRF reported an overrun, which cuts a burst short;
- *           such a burst is lost (not written) and counted as bad. A FILE
+ *           such a burst is lost (not written) and counted as bad. Only the
+ *           first and last counter values of a burst are checked, so the time
+ *           between reads stays what a recorder's would be. A FILE
  *           with "%llu" or "%0Wllu" in it (say dir/b%06llu.bin) gets a new
  *           file per burst, named by the burst number, none deleted. -S sets
  *           libbladeRF's sync buffers (default 256 of 64 KiB, 32 transfers).
@@ -1336,7 +1338,14 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
         }
         for (j = 0; j < (uint64_t)md.actual_count && !burst_bad; j++) {
             uint32_t i, q;
-            uint64_t v = 0, js = j / nc;
+            uint64_t v = 0, js;
+            if (o->rx_now && j == nc && md.actual_count > 2 * nc) {
+                /* -N: the first and last counter values only (a gap inside
+                 * moves the last one), so that the time between reads stays
+                 * a recorder's: checking every sample takes ~17 ms a burst */
+                j = md.actual_count - nc;
+            }
+            js = j / nc;
             get_iq(o, buf, (size_t)j, &i, &q);
             v = counter_value(o, i, q, &mask);
             if (j == 0) {
@@ -1404,8 +1413,9 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     free(buf);
     if (o->rx_now) {
         printf("rxsched: %" PRIu64 " bursts, %" PRIu64 " bad (%" PRIu64 " lost to overruns, %"
-               PRIu64 " gaps without one), %" PRIu64 " samples per channel checked; burst "
-               "cycle %.1f ms mean, %.1f ms max\n", bursts, bad, ovr, gaps, samples,
+               PRIu64 " gaps without one), %" PRIu64 " samples per channel in complete "
+               "bursts (first and last counter values checked); burst cycle %.1f ms mean, "
+               "%.1f ms max\n", bursts, bad, ovr, gaps, samples,
                bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
         printf("rxsched: read %.1f ms mean, %.1f ms max; file write %.1f ms mean, %.1f ms "
                "max\n", nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
