@@ -12,8 +12,8 @@
  *                          (-i FILE | -T TONE_HZ) [-F FREQ] [-g GAIN] [-O]
  *   hwtest-stream trigger  rx [-f FMT] [-r RATE]
  *   hwtest-stream rxsched  -f sc16meta|sc8meta [-l x1|x2] [-c CH] [-r RATE]
- *                          [-t SECONDS] [-b BURST_MS] [-L LEAD_MS]
- *                          [-G GAP_MS] [-o FILE] [-O]
+ *                          [-t SECONDS] [-b BURST_MS] [-L LEAD_MS | -N]
+ *                          [-G GAP_MS] [-o FILE] [-S NBUF,SAMPLES,NXFER] [-O]
  *   hwtest-stream bist     -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
  *                          [-B prbs|tone] [-o GOLDEN | -i GOLDEN] [-O]
  *
@@ -67,6 +67,14 @@
  *           values (both channels the same for x2), and its counter must have
  *           advanced with the timestamp since the first burst: the samples
  *           come from the requested place in the stream.
+ *           With -N the bursts are read "now" (BLADERF_META_FLAG_RX_NOW), back
+ *           to back with no timestamp read, as recorders that keep the stream
+ *           running do: each burst must start where the previous one ended,
+ *           unless libbladeRF reported an overrun, which cuts a burst short;
+ *           such a burst is lost (not written) and counted as bad. A FILE
+ *           with "%llu" or "%0Wllu" in it (say dir/b%06llu.bin) gets a new
+ *           file per burst, named by the burst number, none deleted. -S sets
+ *           libbladeRF's sync buffers (default 256 of 64 KiB, 32 transfers).
  *
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
@@ -103,6 +111,8 @@ struct opts {
     int ch;                     /* 0 or 1 (x1 only) */
     double rate, seconds, freq, gain, tone, warmup;
     double burst_ms, lead_ms, gap_ms;  /* rxsched */
+    bool rx_now;                       /* rxsched -N */
+    unsigned nbuf, bufsamp, nxfer;     /* -S: sync buffers (0: defaults) */
     uint64_t nsamples;
     bladerf_rx_mux mux;
 };
@@ -275,11 +285,26 @@ static bladerf_channel_layout layout(const struct opts *o, bladerf_direction d)
     return o->x2 ? BLADERF_TX_X2 : BLADERF_TX_X1;
 }
 
+static unsigned sync_buffers(const struct opts *o)
+{
+    return o->nbuf ? o->nbuf : NUM_BUFFERS;
+}
+
+static unsigned sync_buffer_samples(const struct opts *o)
+{
+    return o->bufsamp ? o->bufsamp : buffer_samples(o->fmt);
+}
+
+static unsigned sync_transfers(const struct opts *o)
+{
+    return o->nxfer ? o->nxfer : NUM_TRANSFERS;
+}
+
 static int sync_config(struct bladerf *dev, const struct opts *o,
                        bladerf_direction d)
 {
-    CHECK(bladerf_sync_config(dev, layout(o, d), o->fmt, NUM_BUFFERS,
-                              buffer_samples(o->fmt), NUM_TRANSFERS,
+    CHECK(bladerf_sync_config(dev, layout(o, d), o->fmt, sync_buffers(o),
+                              sync_buffer_samples(o), sync_transfers(o),
                               TIMEOUT_MS));
     return 0;
 }
@@ -1115,40 +1140,66 @@ static int do_tx(struct bladerf *dev, struct opts *o)
 
 /* --- Scheduled bursts ---------------------------------------------------- */
 
+/* rxsched -o: the file for burst n, "%llu" or "%0Wllu" in pat replaced by n;
+ * false if pat has neither */
+static bool burst_file_name(char *out, size_t len, const char *pat,
+                            unsigned long long n)
+{
+    const char *p = strchr(pat, '%'), *q;
+    int width = 0;
+    if (p == NULL) {
+        return false;
+    }
+    for (q = p + 1; *q >= '0' && *q <= '9' && width < 100; q++) {
+        width = width * 10 + (*q - '0');
+    }
+    if (strncmp(q, "llu", 3) != 0) {
+        return false;
+    }
+    snprintf(out, len, "%.*s%0*llu%s", (int)(p - pat), pat, width, n, q + 3);
+    return true;
+}
+
 static int do_rxsched(struct bladerf *dev, struct opts *o)
 {
     unsigned nc = (unsigned)nch(o);
     uint64_t per = (uint64_t)llround(o->burst_ms * 1e-3 * o->rate);
     uint64_t lead = (uint64_t)llround(o->lead_ms * 1e-3 * o->rate);
     uint64_t total = per * nc, mask = 0, ref_ts = 0, ref_v = 0;
-    uint64_t bursts = 0, bad = 0, past = 0, samples = 0;
+    uint64_t bursts = 0, bad = 0, past = 0, ovr = 0, gaps = 0, samples = 0;
+    uint64_t next_ts = 0;               /* -N: where the next burst must start */
+    bool have_next = false;
     unsigned reports = 0;
     struct bladerf_metadata md;
     double t0, t1, cyc, cyc_max = 0, cyc_sum = 0;
     /* where the time goes: the timestamp read (a request to the FPGA), the
      * scheduled read (lead + burst + catching up) and the file write */
-    double ts_lat, ts_lat_sum = 0, ts_lat_max = 0, rx_t, rx_sum = 0, rx_max = 0;
+    double ts_lat = 0, ts_lat_sum = 0, ts_lat_max = 0, rx_t, rx_sum = 0, rx_max = 0;
     double wr_t, wr_sum = 0, wr_max = 0;
-    uint64_t ts_lat_slow = 0, nrx = 0, nwr = 0;
+    uint64_t ts_lat_slow = 0, nts = 0, nrx = 0, nwr = 0;
     /* The pause between two reads (file write, gap, timestamp read): the
      * stream keeps running, and once the buffers not in flight are full
      * (sync_worker.c's RX callback finds the next one not empty) every
      * transfer is dropped, in runs of NUM_TRANSFERS (resubmit_count) that
      * carry on even after the read frees buffers. A read scheduled closer
      * than the rest of such a run is "already past". */
-    double xfer_s = (double)buffer_samples(o->fmt) / (o->rate * nc);
-    double buf_s = (NUM_BUFFERS - NUM_TRANSFERS) * xfer_s;
-    double drop_s = (NUM_TRANSFERS - 1) * xfer_s;
+    unsigned nbuf = sync_buffers(o), nxfer = sync_transfers(o);
+    double xfer_s = (double)sync_buffer_samples(o) / (o->rate * nc);
+    double buf_s = (nbuf - nxfer) * xfer_s;
+    double drop_s = (nxfer - 1) * xfer_s;
     double t_rx_end = 0, pause = 0, pause_max = 0;
-    uint64_t long_pauses = 0, past_after_long = 0;
+    uint64_t long_pauses = 0, lost_after_long = 0;
     bool have_ref = false;
+    char path[4096];
+    bool file_per_burst = o->out != NULL && burst_file_name(path, sizeof(path), o->out, 0);
     char *buf;
     int rc = 0, status;
 
     if (!is_meta(o->fmt) || o->mux != BLADERF_RX_MUX_32BIT_COUNTER ||
-        per == 0 || total > UINT_MAX) {
-        fprintf(stderr, "ERROR: rxsched needs a meta format, the 32-bit counter "
-                        "and a burst of 1 to %u samples\n", UINT_MAX);
+        per == 0 || total > UINT_MAX || nxfer >= nbuf) {
+        fprintf(stderr, "ERROR: rxsched needs a meta format, the 32-bit counter, "
+                        "a burst of 1 to %u samples and more buffers than "
+                        "transfers\n", UINT_MAX);
         return 2;
     }
     buf = malloc(total * sample_bytes(o->fmt));
@@ -1166,31 +1217,45 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
         free(buf);
         return 2;
     }
-    printf("rxsched: %s, %s, %.3f Msps, %.0f ms bursts (%" PRIu64 " samples per "
-           "channel) %.1f ms ahead, then %s%s%swait %.0f ms, for %.0f s\n",
-           o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
-           o->lead_ms, o->out ? "a write to " : "", o->out ? o->out : "",
-           o->out ? " and " : "", o->gap_ms, o->seconds);
-    printf("rxsched: libbladeRF's buffers fill in %.1f ms (%u, %u in flight); after an "
-           "overrun its RX worker drops up to %.1f ms more\n", 1e3 * buf_s, NUM_BUFFERS,
-           NUM_TRANSFERS, 1e3 * drop_s);
+    if (o->rx_now) {
+        printf("rxsched: %s, %s, %.3f Msps, %.0f ms bursts (%" PRIu64 " samples per "
+               "channel) read now, back to back, %s%s%swait %.0f ms, for %.0f s\n",
+               o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
+               o->out ? "each written to " : "", o->out ? o->out : "",
+               o->out ? ", then " : "then ", o->gap_ms, o->seconds);
+    } else {
+        printf("rxsched: %s, %s, %.3f Msps, %.0f ms bursts (%" PRIu64 " samples per "
+               "channel) %.1f ms ahead, then %s%s%swait %.0f ms, for %.0f s\n",
+               o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->burst_ms, per,
+               o->lead_ms, o->out ? "a write to " : "", o->out ? o->out : "",
+               o->out ? " and " : "", o->gap_ms, o->seconds);
+    }
+    printf("rxsched: libbladeRF's buffers fill in %.1f ms (%u of %u samples, %u in "
+           "flight); after an overrun its RX worker drops up to %.1f ms more\n",
+           1e3 * buf_s, nbuf, sync_buffer_samples(o), nxfer, 1e3 * drop_s);
     t0 = t1 = now();
     while (now() - t0 < o->seconds) {
-        uint64_t ts_now = 0, ts, j, v0 = 0;
-        bool burst_bad = false;
-        double ta = now();
-        CHECK(bladerf_get_timestamp(dev, BLADERF_RX, &ts_now));
-        ts_lat = now() - ta;
-        ts_lat_sum += ts_lat;
-        if (ts_lat > ts_lat_max) {
-            ts_lat_max = ts_lat;
-        }
-        if (ts_lat > 1e-3) {
-            ts_lat_slow++;
-        }
-        ts = ts_now + lead;
+        uint64_t ts_now = 0, ts = 0, j, v0 = 0;
+        bool burst_bad = false, lost = false;
+        double ta;
         memset(&md, 0, sizeof(md));
-        md.timestamp = ts;                  /* scheduled, not RX_NOW */
+        if (o->rx_now) {
+            md.flags = BLADERF_META_FLAG_RX_NOW;    /* the next samples queued */
+        } else {
+            ta = now();
+            CHECK(bladerf_get_timestamp(dev, BLADERF_RX, &ts_now));
+            ts_lat = now() - ta;
+            nts++;
+            ts_lat_sum += ts_lat;
+            if (ts_lat > ts_lat_max) {
+                ts_lat_max = ts_lat;
+            }
+            if (ts_lat > 1e-3) {
+                ts_lat_slow++;
+            }
+            ts = ts_now + lead;
+            md.timestamp = ts;                  /* scheduled */
+        }
         ta = now();
         pause = (t_rx_end > 0) ? ta - t_rx_end : 0;
         if (pause > pause_max) {
@@ -1208,7 +1273,7 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
             past++;
             bad++;
             if (pause > buf_s) {
-                past_after_long++;
+                lost_after_long++;
             }
             bladerf_get_timestamp(dev, BLADERF_RX, &ts_after);
             if (reports++ < MAX_REPORTS) {
@@ -1231,7 +1296,35 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
             rc = 2;
             break;
         }
-        if (md.timestamp != ts || md.actual_count != total ||
+        if (o->rx_now) {
+            if (md.actual_count != total || (md.status & BLADERF_META_STATUS_OVERRUN)) {
+                /* a recorder loses this burst: an overrun cut it short, and
+                 * the next one starts after the gap */
+                lost = burst_bad = true;
+                ovr++;
+                if (pause > buf_s) {
+                    lost_after_long++;
+                }
+                have_next = false;
+                if (reports++ < MAX_REPORTS) {
+                    printf("  burst %" PRIu64 ": overrun, %u of %" PRIu64 " samples (%.1f ms "
+                           "since the previous read)\n", bursts, md.actual_count, total,
+                           1e3 * pause);
+                }
+            } else {
+                if (have_next && md.timestamp != next_ts) {
+                    burst_bad = true;
+                    gaps++;
+                    if (reports++ < MAX_REPORTS) {
+                        printf("  burst %" PRIu64 ": starts at 0x%" PRIx64 ", not at 0x%"
+                               PRIx64 " where the previous one ended, and no overrun "
+                               "was reported\n", bursts, (uint64_t)md.timestamp, next_ts);
+                    }
+                }
+                next_ts = md.timestamp + per;
+                have_next = true;
+            }
+        } else if (md.timestamp != ts || md.actual_count != total ||
             (md.status & BLADERF_META_STATUS_OVERRUN)) {
             burst_bad = true;
             if (reports++ < MAX_REPORTS) {
@@ -1275,13 +1368,18 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
         } else {
             samples += per;
         }
-        if (o->out != NULL) {
+        if (o->out != NULL && !lost) {
             FILE *f;
+            const char *name = o->out;
+            if (file_per_burst) {
+                burst_file_name(path, sizeof(path), o->out, (unsigned long long)bursts);
+                name = path;
+            }
             ta = now();
-            f = fopen(o->out, "wb");
+            f = fopen(name, "wb");
             if (f == NULL || fwrite(buf, sample_bytes(o->fmt), (size_t)total, f) != total ||
                 fclose(f) != 0) {
-                fprintf(stderr, "ERROR: cannot write %s\n", o->out);
+                fprintf(stderr, "ERROR: cannot write %s\n", name);
                 rc = 2;
                 break;
             }
@@ -1304,18 +1402,29 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     }
     enable_channels(dev, o, BLADERF_RX, false);
     free(buf);
-    printf("rxsched: %" PRIu64 " bursts, %" PRIu64 " bad (%" PRIu64 " too late to "
-           "schedule), %" PRIu64 " samples per channel checked; burst cycle %.1f ms "
-           "mean, %.1f ms max\n", bursts, bad, past, samples,
-           bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
-    printf("rxsched: timestamp read %.2f ms mean, %.2f ms max, %" PRIu64 " over 1 ms; "
-           "scheduled read %.1f ms mean, %.1f ms max; file write %.1f ms mean, %.1f ms max\n",
-           bursts ? 1e3 * ts_lat_sum / (double)bursts : 0.0, 1e3 * ts_lat_max, ts_lat_slow,
-           nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
-           nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
+    if (o->rx_now) {
+        printf("rxsched: %" PRIu64 " bursts, %" PRIu64 " bad (%" PRIu64 " lost to overruns, %"
+               PRIu64 " gaps without one), %" PRIu64 " samples per channel checked; burst "
+               "cycle %.1f ms mean, %.1f ms max\n", bursts, bad, ovr, gaps, samples,
+               bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
+        printf("rxsched: read %.1f ms mean, %.1f ms max; file write %.1f ms mean, %.1f ms "
+               "max\n", nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
+               nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
+    } else {
+        printf("rxsched: %" PRIu64 " bursts, %" PRIu64 " bad (%" PRIu64 " too late to "
+               "schedule), %" PRIu64 " samples per channel checked; burst cycle %.1f ms "
+               "mean, %.1f ms max\n", bursts, bad, past, samples,
+               bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
+        printf("rxsched: timestamp read %.2f ms mean, %.2f ms max, %" PRIu64 " over 1 ms; "
+               "scheduled read %.1f ms mean, %.1f ms max; file write %.1f ms mean, %.1f ms "
+               "max\n", nts ? 1e3 * ts_lat_sum / (double)nts : 0.0, 1e3 * ts_lat_max,
+               ts_lat_slow, nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
+               nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
+    }
     printf("rxsched: pauses between reads %.1f ms max, %" PRIu64 " longer than the "
-           "%.1f ms the buffers last; %" PRIu64 " of the %" PRIu64 " too late followed "
-           "one\n", 1e3 * pause_max, long_pauses, 1e3 * buf_s, past_after_long, past);
+           "%.1f ms the buffers last; %" PRIu64 " of the %" PRIu64 " %s followed one\n",
+           1e3 * pause_max, long_pauses, 1e3 * buf_s, lost_after_long,
+           o->rx_now ? ovr : past, o->rx_now ? "overruns" : "too late");
     if (rc == 0 && (bad != 0 || bursts == 0)) {
         rc = 1;
     }
@@ -1947,7 +2056,7 @@ static void usage(void)
             "  -f FMT (sc16 sc16meta sc8 sc8meta packed)  -l x1|x2  -c 1|2\n"
             "  -r RATE  -t SECONDS  -n SAMPLES  -m MUX  -F FREQ  -g GAIN  -O\n"
             "  -o FILE  -i FILE  -T TONE_HZ  -W WARMUP_S  -B prbs|tone  -d DEVICE\n"
-            "  -b BURST_MS  -L LEAD_MS  -G GAP_MS (rxsched)\n"
+            "  -b BURST_MS  -L LEAD_MS | -N  -G GAP_MS  -S NBUF,SAMPLES,NXFER (rxsched)\n"
             "  -v (verbose)\n");
 }
 
@@ -1971,7 +2080,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -2004,6 +2113,16 @@ int main(int argc, char **argv)
             case 'b': o.burst_ms = atof(optarg); break;
             case 'L': o.lead_ms = atof(optarg); break;
             case 'G': o.gap_ms = atof(optarg); break;
+            case 'N': o.rx_now = true; break;
+            case 'S':
+                if (sscanf(optarg, "%u,%u,%u", &o.nbuf, &o.bufsamp, &o.nxfer) != 3 ||
+                    o.nbuf == 0 || o.bufsamp == 0 || o.bufsamp % 1024 != 0 ||
+                    o.nxfer == 0) {
+                    fprintf(stderr, "ERROR: -S wants NBUF,SAMPLES,NXFER (SAMPLES a "
+                                    "multiple of 1024)\n");
+                    return 2;
+                }
+                break;
             case 'B':
                 if (strcmp(optarg, "tone") != 0 && strcmp(optarg, "prbs") != 0) {
                     usage();
