@@ -31,6 +31,9 @@
 #   fullsoak  the counter check at 61.44 Msps for FULLSOAK_RX_MIN minutes
 #          (default 60), then the loopback check at 30.72 Msps for
 #          FULLSOAK_LOOP_MIN minutes (default 30)
+#   bist   the AD9361's built-in PRBS at its RX data port, every sample
+#          checked: the AD9361-to-FPGA LVDS interface alone, at full rate
+#          (BIST_MIN minutes per case, default 2) and overclocked
 #
 # Unless HWTEST_TX=1 (every bladeRF TX port cabled through >= 20 dB or
 # terminated, no antennas, TX gain capped; see README.md), the suite is
@@ -56,7 +59,7 @@
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
-[ $# -ge 2 ] || { sed -n '2,40p' "$0"; exit 2; }
+[ $# -ge 2 ] || { awk 'NR > 1 && /^set -uo/ { exit } NR > 1' "$0"; exit 2; }
 image=$(readlink -f "$1"); label=$2; shift 2
 phases=("$@"); [ ${#phases[@]} -gt 0 ] || phases=(smoke host fpga rf)
 [ -f "$image" ] || die "no such image: $image"
@@ -413,6 +416,43 @@ for phase in "${phases[@]}"; do
             runtest fullsoak_loop_sc16-host $((loops + 300)) - "$T/hwtest-stream" loopback -f sc16 -r 30.72M -t "$loops"
         fi
         unset BLADERF_DEFAULT_TUNING_MODE
+        ;;
+    bist)
+        # The AD9361 replaces its received samples with its BIST pattern at
+        # the RX data port (hwtest-stream bist), so every sample crosses the
+        # AD9361-to-FPGA LVDS interface with a known value: the xA5's one
+        # timing path with negative setup slack (Nuand's image -0.154 ns,
+        # the Nios V build -0.110 ns) is the capture of that interface.
+        # Host tuning mode only (in FPGA tuning mode the AD9361's state
+        # outlives the program); the image is reloaded afterwards.
+        #  - bist_prbs: the PRBS at 61.44 Msps on each channel (SC16) and on
+        #    both (30.72 Msps, the most two channels of SC16 carry over USB)
+        #  - bist_tone: the BIST tone instead (a different bit pattern)
+        #  - bist_prbs_sc8: SC8 at 61.44 Msps, saving the golden period
+        #  - bist_oc: overclocked (122.88 Msps, SC8), learning the pattern
+        #    afresh (it may come out framed differently: libbladeRF's
+        #    overclocking is a set of undocumented AD9361 register writes,
+        #    the FPGA does nothing different) and against the golden period
+        load_image bist
+        export BLADERF_DEFAULT_TUNING_MODE=host
+        bs=$((${BIST_MIN:-2} * 60))
+        runtest bist_prbs_sc16_rx1-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -c 1 -r 61.44M -t "$bs"
+        runtest bist_prbs_sc16_rx2-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -c 2 -r 61.44M -t "$bs"
+        runtest bist_prbs_sc16_x2-host $((bs + 120)) - "$T/hwtest-stream" bist -f sc16 -l x2 -r 30.72M -t "$bs"
+        runtest bist_tone_sc16_rx1-host 120 - "$T/hwtest-stream" bist -f sc16 -c 1 -r 61.44M -B tone -t 20
+        for c in 1 2; do
+            runtest "bist_prbs_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -r 61.44M -t 20 \
+                -o "$out/scratch/bist-gold-sc8-rx$c.bin"
+        done
+        for c in 1 2; do
+            gold="$out/scratch/bist-gold-sc8-rx$c.bin"
+            runtest "bist_oc_learn_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -O -r 122.88M -t 20
+            if [ -f "$gold" ]; then
+                runtest "bist_oc_gold_sc8_rx$c-host" 120 - "$T/hwtest-stream" bist -f sc8 -c "$c" -O -r 122.88M -t 20 -i "$gold"
+            fi
+        done
+        unset BLADERF_DEFAULT_TUNING_MODE
+        load_image after-bist
         ;;
     soak)
         load_image soak

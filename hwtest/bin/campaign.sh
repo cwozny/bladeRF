@@ -5,18 +5,17 @@
 #
 # Each plan line is "<image.rbf> <label> [phase...] [VAR=<value>...]", i.e.
 # run-suite.sh's arguments plus settings for that run (SOAK_MINUTES,
-# FULLSOAK_RX_MIN, FULLSOAK_LOOP_MIN, HOST_BUILD, HWTEST_SKIP, HWTEST_FIXES;
-# see run-suite.sh); blank lines
-# and # comments are ignored. After each
-# run the board is brought back to the official image with recover.sh; if
-# that needs a human (replug, bootloader), the campaign stops, since every
-# later run would fail anyway. The campaign log goes to
+# FULLSOAK_RX_MIN, FULLSOAK_LOOP_MIN, BIST_MIN, HOST_BUILD, HWTEST_SKIP,
+# HWTEST_FIXES; see run-suite.sh); blank lines and # comments are ignored.
+# After each run the board is brought back to the official image with
+# recover.sh; if that needs a human (replug, bootloader), the campaign
+# stops, since every later run would fail anyway. The campaign log goes to
 # $RESULTS_DIR/campaign-<time>.log; each run has its own run-suite.sh
 # directory, listed at the end.
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
-[ $# -eq 1 ] && [ -f "$1" ] || { sed -n '2,15p' "$0"; exit 2; }
+[ $# -eq 1 ] && [ -f "$1" ] || { awk 'NR > 1 && /^set -uo/ { exit } NR > 1' "$0"; exit 2; }
 mapfile -t lines < "$1"
 check_good_images
 
@@ -35,7 +34,7 @@ for line in "${lines[@]}"; do
     envs=(); args=()
     for w in "${words[@]}"; do
         case "$w" in
-            SOAK_MINUTES=*|FULLSOAK_RX_MIN=*|FULLSOAK_LOOP_MIN=*|HOST_BUILD=*|HWTEST_SKIP=*|HWTEST_FIXES=*|HWTEST_FPGA_MIMO=*)
+            SOAK_MINUTES=*|FULLSOAK_RX_MIN=*|FULLSOAK_LOOP_MIN=*|BIST_MIN=*|HOST_BUILD=*|HWTEST_SKIP=*|HWTEST_FIXES=*|HWTEST_FPGA_MIMO=*)
                 envs+=("${w/=\~/=$HOME}") ;;
             *) args+=("${w/#\~/$HOME}") ;;
         esac

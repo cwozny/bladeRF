@@ -57,7 +57,8 @@ Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
 (the libbladeRF build under test, default `host-build`), `HWTEST_SKIP=<test>,...`
 (left out, logged), `HWTEST_FIXES=1` (`HOST_BUILD` has the libbladeRF fixes on
 branch `fixes`: also run the tests below that fail with every image without
-them; `HWTEST_FPGA_MIMO=1` is its older name) and `SOAK_MINUTES`.
+them; `HWTEST_FPGA_MIMO=1` is its older name), `SOAK_MINUTES`,
+`FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and `BIST_MIN`.
 
 Things that fail with every image, including the official one, so the
 harness does not run them that way:
@@ -164,7 +165,7 @@ at 5 Msps the sync worker overran every few hundred iterations, so it now
 uses 64. (libbladeRF has started RX streaming at `bladerf_enable_module`
 since 712d49e2, so a few overruns at start-up are normal.)
 
-### Sample formats, overclocking, triggers (formats, oc, trigger, fullsoak)
+### Sample formats, overclocking, triggers, the LVDS interface (formats, oc, trigger, fullsoak, bist)
 
 These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
 `bin/pulse-check.py`:
@@ -220,6 +221,27 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   AD9361 or its data interface at the overclocked rate (on the xA5 that
   interface's receive clock is also the design's one failing timing path, in
   Nuand's build as in ours).
+* **bist** has the AD9361 replace its received samples with its built-in
+  test pattern (BIST) at its RX data port: register 0x3F4 = 0x09 injects the
+  PRBS, 0x0B a tone at fs/32 (the values the AD9361 no-OS driver's
+  `ad9361_bist_prbs()` and `ad9361_bist_tone()` write; libbladeRF has no
+  BIST call, so it uses `bladerf_set_rfic_register`). Every sample then
+  crosses the AD9361-to-FPGA LVDS interface, and nothing else, with a known
+  value: the pattern repeats, so hwtest-stream learns its period and one
+  golden period (voted over 15 repeats) from the first 2^24 samples per
+  channel, restarts the stream, finds the phase and checks every later
+  sample, counting errors per bit of I and Q. A run of 256 bad samples
+  (lost samples, or garbage) makes it look for the phase again, and fails.
+  Overclocked (122.88 Msps, SC8), the phase both learns the pattern afresh
+  and checks it against the golden period learnt at 61.44 Msps in SC8 (`-o`
+  saves it, `-i` uses it): libbladeRF's overclocking is a set of
+  undocumented AD9361 register writes (the FPGA does nothing different), so
+  the pattern may come out framed differently, and garbage cannot be
+  learnt. On
+  the xA5 the capture of this interface is the design's one timing path
+  with negative setup slack, so this is the direct check of it. The BIST is
+  switched off at the end (also on SIGTERM); `lib/bist-selftest.c` (run by
+  build-host.sh) checks the checker on synthetic data.
 * **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
   that no samples arrive in 1 s, fires it and checks that samples then arrive
   and the trigger reports fired. The counter modes bypass the trigger gate,
@@ -257,7 +279,7 @@ the caps it would take 30 dB per link.
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
 | `bin/pulse-check.py` | Overclocked pulse trains both ways, and full-rate TX in every sample format, against the B200mini |
-| `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers (built into `host-build/output/hwtest-stream`) |
+| `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |

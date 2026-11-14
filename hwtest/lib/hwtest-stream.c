@@ -11,6 +11,8 @@
  *   hwtest-stream tx       -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
  *                          (-i FILE | -T TONE_HZ) [-F FREQ] [-g GAIN] [-O]
  *   hwtest-stream trigger  rx [-f FMT] [-r RATE]
+ *   hwtest-stream bist     -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
+ *                          [-B prbs|tone] [-o GOLDEN | -i GOLDEN] [-O]
  *
  * FMT: sc16, sc16meta, sc8, sc8meta, packed (SC16_Q11_PACKED).
  *
@@ -38,6 +40,17 @@
  * trigger   with one bladeRF as trigger master (J51-1): arms the RX trigger,
  *           checks that no samples flow while it is armed, fires it, and
  *           checks that samples then flow and the trigger reports fired.
+ * bist      has the AD9361 replace its received samples with its built-in
+ *           test pattern (BIST: PRBS, or with -B tone a tone) at its RX data
+ *           port, so every sample crosses the AD9361-FPGA LVDS interface
+ *           with a known value, and checks every sample of every channel
+ *           (SC16 and SC8 only). The pattern repeats: its period and one
+ *           "golden" period are learnt from the first samples (or read from
+ *           GOLDEN with -i, then only the phase is found), and every later
+ *           sample must equal the golden one; errors are counted per bit.
+ *           -o saves the golden period (for an -i run in the same format at
+ *           a rate where learning may fail, such as overclocked). The BIST
+ *           is switched off again at the end (and on SIGINT/SIGTERM).
  *
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
@@ -51,6 +64,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -68,7 +82,7 @@
 struct opts {
     const char *mode, *sub, *dev, *in, *out, *fmt_name, *mux_name;
     bladerf_format fmt;
-    bool x2, oversample, have_freq, have_gain, have_tone;
+    bool x2, oversample, have_freq, have_gain, have_tone, bist_tone;
     int ch;                     /* 0 or 1 (x1 only) */
     double rate, seconds, freq, gain, tone, warmup;
     uint64_t nsamples;
@@ -1187,13 +1201,525 @@ static int do_trigger(struct bladerf *dev, struct opts *o)
     return rc;
 }
 
+/* --- AD9361 built-in self test ----------------------------------------- */
+
+/* The AD9361's BIST Config register (no-OS ad9361.h REG_BIST_CONFIG) and the
+ * values ad9361_bist_prbs() and ad9361_bist_tone() write to inject at the RX
+ * data port (BIST_CTRL_POINT(2) | BIST_ENABLE): its PRBS, or (TONE_PRBS set)
+ * a tone at fs/32 and full scale. libbladeRF has no BIST call. */
+#define AD9361_REG_BIST_CONFIG 0x3f4
+#define BIST_RX_PRBS           0x09
+#define BIST_RX_TONE           0x0b
+#define BIST_LEARN    (1u << 24)  /* samples per slot to learn the period from */
+#define BIST_WINDOW   256         /* samples that must recur exactly */
+#define BIST_ALIGN    1024        /* samples to find the phase with */
+#define BIST_LOST     256         /* bad samples in a row: find the phase again */
+#define BIST_MAGIC    "HWBIST1\n"
+
+static volatile sig_atomic_t stop_requested;
+
+static void on_stop_signal(int sig)
+{
+    (void)sig;
+    stop_requested = 1;
+}
+
+struct bist_pos {
+    uint32_t v, pos;
+};
+
+struct bist_slot {
+    uint32_t *gold;             /* one period of the pattern */
+    struct bist_pos *ix;        /* the golden period sorted by value */
+    uint64_t period, phase;     /* phase: gold index of the next sample */
+    uint32_t *acc;              /* samples kept while learning or aligning */
+    uint64_t nacc, fed;         /* fed: samples of the checking pass */
+    bool aligned, failed;
+    uint64_t checked, bad, resyncs, unchecked, bad_run, good_run, best_run;
+    uint64_t ibit[16], qbit[16];
+    unsigned reports;
+};
+
+/* Smallest p with x[s + p ...] == x[s ...] over BIST_WINDOW samples, tried
+ * from a few starts s (one may hold a bad sample); 0 if none */
+static uint64_t bist_find_period(const uint32_t *x, uint64_t n)
+{
+    uint64_t s, p;
+    for (s = 0; s < 16 * 1024 && s + 2 * BIST_WINDOW <= n; s += 1024) {
+        for (p = 1; s + p + BIST_WINDOW <= n; p++) {
+            if (x[s + p] == x[s] &&
+                memcmp(&x[s + p], &x[s], BIST_WINDOW * sizeof(*x)) == 0) {
+                return p;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The golden period, voted from the repeats in x[0..n): per position, the
+ * value most of (up to 15) repeats agree on, so a bad sample cannot become
+ * golden */
+static void bist_vote(struct bist_slot *s, const uint32_t *x, uint64_t n)
+{
+    uint64_t p = s->period, j, reps = n / p;
+    uint32_t v[15];
+    if (reps > 15) {
+        reps = 15;
+    }
+    for (j = 0; j < p; j++) {
+        unsigned best = 0, cnt, a, b;
+        uint32_t bestv = x[j];
+        for (a = 0; a < reps; a++) {
+            v[a] = x[j + a * p];
+        }
+        for (a = 0; a < reps; a++) {
+            for (cnt = 0, b = 0; b < reps; b++) {
+                cnt += v[a] == v[b];
+            }
+            if (cnt > best) {
+                best = cnt;
+                bestv = v[a];
+            }
+        }
+        s->gold[j] = bestv;
+    }
+}
+
+static int bist_pos_cmp(const void *a, const void *b)
+{
+    const struct bist_pos *x = a, *y = b;
+    return x->v < y->v ? -1 : x->v > y->v;
+}
+
+static int bist_index(struct bist_slot *s)
+{
+    uint64_t j;
+    s->ix = malloc(s->period * sizeof(*s->ix));
+    if (s->ix == NULL) {
+        return -1;
+    }
+    for (j = 0; j < s->period; j++) {
+        s->ix[j].v = s->gold[j];
+        s->ix[j].pos = (uint32_t)j;
+    }
+    qsort(s->ix, s->period, sizeof(*s->ix), bist_pos_cmp);
+    return 0;
+}
+
+/* Phase (golden index) of x[0], x[0..n) being received samples: a few of the
+ * first samples are looked up in the golden period, and a candidate phase
+ * must match at least half of BIST_WINDOW samples. -1 if none does. */
+static int64_t bist_align(const struct bist_slot *s, const uint32_t *x,
+                          uint64_t n)
+{
+    uint64_t p = s->period, a, j;
+    for (a = 0; a < 32 && a + BIST_WINDOW <= n; a++) {
+        size_t lo = 0, hi = p, m;
+        unsigned c;
+        while (lo < hi) {           /* first entry with a value >= x[a] */
+            size_t mid = (lo + hi) / 2;
+            if (s->ix[mid].v < x[a]) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        for (m = lo, c = 0; m < p && s->ix[m].v == x[a] && c < 64; m++, c++) {
+            uint64_t ph = (s->ix[m].pos + p - a % p) % p;
+            unsigned good = 0;
+            for (j = 0; j < BIST_WINDOW; j++) {
+                good += x[j] == s->gold[(ph + j) % p];
+            }
+            if (2 * good >= BIST_WINDOW) {
+                return (int64_t)ph;
+            }
+        }
+    }
+    return -1;
+}
+
+static void bist_check(struct bist_slot *s, uint32_t v, int k, uint64_t pos)
+{
+    uint32_t e = s->gold[s->phase];
+    unsigned b;
+    if (++s->phase == s->period) {
+        s->phase = 0;
+    }
+    s->checked++;
+    if (v == e) {
+        s->bad_run = 0;
+        if (++s->good_run > s->best_run) {
+            s->best_run = s->good_run;
+        }
+        return;
+    }
+    s->bad++;
+    s->good_run = 0;
+    for (b = 0; b < 16; b++) {
+        s->ibit[b] += ((v ^ e) >> b) & 1;
+        s->qbit[b] += ((v ^ e) >> (16 + b)) & 1;
+    }
+    if (s->reports++ < MAX_REPORTS) {
+        printf("  slot %d sample %" PRIu64 ": I 0x%04x Q 0x%04x, expected "
+               "I 0x%04x Q 0x%04x\n", k, pos, v & 0xffff, v >> 16, e & 0xffff,
+               e >> 16);
+    }
+    if (++s->bad_run >= BIST_LOST) {
+        /* lost samples (or garbage): find the phase again */
+        if (s->resyncs < MAX_REPORTS) {
+            printf("  slot %d sample %" PRIu64 ": %u bad samples in a row, "
+                   "finding the phase again\n", k, pos, BIST_LOST);
+        }
+        s->aligned = false;
+        s->nacc = 0;
+        s->resyncs++;
+        s->bad_run = 0;
+    }
+}
+
+static void bist_show(const uint32_t *x, uint64_t n, int k, const char *what)
+{
+    uint64_t j;
+    printf("slot %d, %s:", k, what);
+    for (j = 0; j < n && j < 8; j++) {
+        printf(" %04x/%04x", x[j] & 0xffff, x[j] >> 16);
+    }
+    printf(" (I/Q)\n");
+}
+
+/* Learn the period and the golden period from s->acc, and check those
+ * samples against it */
+static void bist_learn(struct bist_slot *s, int k)
+{
+    uint64_t j;
+    bist_show(s->acc, s->nacc, k, "first samples");
+    s->period = bist_find_period(s->acc, s->nacc);
+    if (s->period == 0 || s->period * 2 > s->nacc) {
+        printf("slot %d: no repeating pattern in %" PRIu64 " samples\n", k,
+               s->nacc);
+        s->failed = true;
+        return;
+    }
+    s->gold = malloc(s->period * sizeof(*s->gold));
+    if (s->gold == NULL) {
+        s->failed = true;
+        return;
+    }
+    bist_vote(s, s->acc, s->nacc);
+    printf("slot %d: pattern period %" PRIu64 " samples, voted over %" PRIu64
+           " repeats\n", k, s->period,
+           s->nacc / s->period > 15 ? 15 : s->nacc / s->period);
+    if (s->period < 8) {
+        printf("slot %d: (nearly) constant samples: is the BIST on?\n", k);
+        s->failed = true;
+        return;
+    }
+    s->phase = 0;
+    s->aligned = true;
+    for (j = 0; j < s->nacc && s->aligned; j++) {
+        bist_check(s, s->acc[j], k, j);
+    }
+    s->aligned = false;         /* the stream restarts: phase unknown */
+    s->nacc = 0;
+    s->bad_run = s->good_run = 0;
+}
+
+static void bist_feed(struct bist_slot *s, uint32_t v, int k, uint64_t pos)
+{
+    int64_t ph;
+    uint64_t j, n;
+    s->fed++;
+    if (s->aligned) {
+        bist_check(s, v, k, pos);
+        return;
+    }
+    if (s->failed) {
+        s->unchecked++;
+        return;
+    }
+    s->acc[s->nacc++] = v;
+    if (s->nacc < BIST_ALIGN) {
+        return;
+    }
+    n = s->nacc;
+    s->nacc = 0;
+    ph = bist_align(s, s->acc, n);
+    if (ph < 0) {
+        if (s->unchecked == 0) {
+            printf("slot %d sample %" PRIu64 ": the samples match the golden "
+                   "period nowhere (yet)\n", k, pos);
+            bist_show(s->acc, n, k, "samples");
+            bist_show(s->gold, s->period, k, "golden period starts");
+        }
+        s->unchecked += n;
+        return;
+    }
+    s->phase = (uint64_t)ph;
+    s->aligned = true;
+    for (j = 0; j < n && s->aligned; j++) {
+        bist_check(s, s->acc[j], k, pos + 1 - n + j);
+    }
+}
+
+static int bist_load(const struct opts *o, struct bist_slot *sl)
+{
+    FILE *f = fopen(o->in, "rb");
+    char magic[8];
+    uint32_t fmt, slots;
+    uint64_t period;
+    int k;
+    if (f == NULL || fread(magic, 1, 8, f) != 8 ||
+        memcmp(magic, BIST_MAGIC, 8) != 0 || fread(&fmt, 4, 1, f) != 1 ||
+        fread(&slots, 4, 1, f) != 1 || fread(&period, 8, 1, f) != 1 ||
+        period == 0 || period > BIST_LEARN) {
+        fprintf(stderr, "ERROR: %s is not a golden period file\n", o->in);
+        return 2;
+    }
+    if (fmt != (uint32_t)o->fmt || slots != (uint32_t)nch(o)) {
+        fprintf(stderr, "ERROR: %s holds format %u with %u slots\n", o->in,
+                fmt, slots);
+        return 2;
+    }
+    for (k = 0; k < nch(o); k++) {
+        sl[k].period = period;
+        sl[k].gold = malloc(period * sizeof(uint32_t));
+        if (sl[k].gold == NULL ||
+            fread(sl[k].gold, sizeof(uint32_t), period, f) != period) {
+            fprintf(stderr, "ERROR: reading %s\n", o->in);
+            return 2;
+        }
+    }
+    fclose(f);
+    printf("golden period of %" PRIu64 " samples from %s\n", period, o->in);
+    return 0;
+}
+
+static void bist_save(const struct opts *o, const struct bist_slot *sl)
+{
+    FILE *f;
+    uint32_t fmt = (uint32_t)o->fmt, slots = (uint32_t)nch(o);
+    int k, err = 0;
+    for (k = 0; k < nch(o); k++) {
+        if (sl[k].gold == NULL || sl[k].failed || sl[k].bad != 0 ||
+            sl[k].period != sl[0].period) {
+            printf("golden period not saved: slot %d did not learn cleanly\n", k);
+            return;
+        }
+    }
+    f = fopen(o->out, "wb");
+    if (f == NULL) {
+        fprintf(stderr, "ERROR: writing %s\n", o->out);
+        return;
+    }
+    err |= fwrite(BIST_MAGIC, 1, 8, f) != 8;
+    err |= fwrite(&fmt, 4, 1, f) != 1;
+    err |= fwrite(&slots, 4, 1, f) != 1;
+    err |= fwrite(&sl[0].period, 8, 1, f) != 1;
+    for (k = 0; k < nch(o); k++) {
+        err |= fwrite(sl[k].gold, sizeof(uint32_t), sl[k].period, f) !=
+               sl[k].period;
+    }
+    err |= fclose(f) != 0;
+    if (err) {
+        fprintf(stderr, "ERROR: writing %s\n", o->out);
+    } else {
+        printf("golden period saved to %s\n", o->out);
+    }
+}
+
+/* One streaming pass: learn (fill each slot's acc with BIST_LEARN samples)
+ * or check for o->seconds. Returns 0, or 2 on errors. */
+static int bist_pass(struct bladerf *dev, const struct opts *o, void *buf,
+                     struct bist_slot *sl, bool learn, uint64_t *pos,
+                     double *t)
+{
+    unsigned n = buffer_samples(o->fmt), per = n / (unsigned)nch(o), j;
+    struct bladerf_metadata md;
+    uint64_t next_ts = 0, gaps = 0, ovr = 0;
+    double t0;
+    int rc = 0, k;
+    if (sync_config(dev, o, BLADERF_RX) != 0 ||
+        enable_channels(dev, o, BLADERF_RX, true) != 0) {
+        return 2;
+    }
+    t0 = now();
+    while (now() - t0 < o->warmup && !stop_requested && rc == 0) {
+        rc = rx_buffer(dev, o, buf, n, &md, &next_ts, &gaps, &ovr, TIMEOUT_MS,
+                       false);
+    }
+    t0 = now();
+    while (!stop_requested && rc == 0) {
+        rc = rx_buffer(dev, o, buf, n, &md, &next_ts, &gaps, &ovr, TIMEOUT_MS,
+                       false);
+        if (rc != 0) {
+            break;
+        }
+        for (j = 0; j < n; j++) {
+            uint32_t i, q;
+            struct bist_slot *s;
+            k = (int)(j % (unsigned)nch(o));
+            s = &sl[k];
+            get_iq(o, buf, j, &i, &q);
+            if (!learn) {
+                bist_feed(s, i | q << 16, k, *pos + j / (unsigned)nch(o));
+            } else if (s->nacc < BIST_LEARN) {
+                s->acc[s->nacc++] = i | q << 16;
+            }
+        }
+        *pos += per;
+        *t = now() - t0;
+        if (learn ? sl[nch(o) - 1].nacc >= BIST_LEARN : *t >= o->seconds) {
+            break;
+        }
+    }
+    enable_channels(dev, o, BLADERF_RX, false);
+    return rc;
+}
+
+static int bist_report(const struct opts *o, struct bist_slot *sl, double t)
+{
+    int k, rc = 0;
+    unsigned b;
+    for (k = 0; k < nch(o); k++) {
+        struct bist_slot *s = &sl[k];
+        double rate = t > 0 ? s->fed / t : 0;
+        printf("slot %d (ch%d): %" PRIu64 " samples checked, %" PRIu64
+               " bad (%.3g), %" PRIu64 " phase losses, %" PRIu64
+               " not checked, longest clean run %" PRIu64 "; checking pass "
+               "%.2f s at %.3f Msps\n", k, slot_ch(o, k) + 1, s->checked,
+               s->bad, s->checked ? (double)s->bad / s->checked : 0.0,
+               s->resyncs, s->unchecked + s->nacc, s->best_run, t, rate / 1e6);
+        if (s->bad != 0) {
+            printf("  bit errors I (bit:count):");
+            for (b = 0; b < 16; b++) {
+                if (s->ibit[b] != 0) {
+                    printf(" %u:%" PRIu64, b, s->ibit[b]);
+                }
+            }
+            printf("\n  bit errors Q (bit:count):");
+            for (b = 0; b < 16; b++) {
+                if (s->qbit[b] != 0) {
+                    printf(" %u:%" PRIu64, b, s->qbit[b]);
+                }
+            }
+            printf("\n");
+        }
+        if (s->failed || s->checked == 0 || s->bad != 0 || s->resyncs != 0 ||
+            s->unchecked != 0) {
+            rc = 1;
+        }
+        if (rate < 0.98 * o->rate) {
+            printf("  rate below 98 %%\n");
+            rc = 1;
+        }
+    }
+    return rc;
+}
+
+static int do_bist(struct bladerf *dev, struct opts *o)
+{
+    void *buf = calloc(buffer_samples(o->fmt), sample_bytes(o->fmt));
+    uint8_t val = o->bist_tone ? BIST_RX_TONE : BIST_RX_PRBS, rb = 0;
+    struct bist_slot sl[2];
+    uint64_t pos = 0;
+    double t = 0;
+    int rc = 0, k;
+
+    if (buf == NULL) {
+        return 2;
+    }
+    if (is_meta(o->fmt) || o->fmt == BLADERF_FORMAT_SC16_Q11_PACKED) {
+        fprintf(stderr, "ERROR: bist supports sc16 and sc8 only\n");
+        return 2;
+    }
+    memset(sl, 0, sizeof(sl));
+    if (o->in != NULL && bist_load(o, sl) != 0) {
+        return 2;
+    }
+    for (k = 0; k < nch(o); k++) {
+        sl[k].acc = malloc((o->in != NULL ? BIST_ALIGN : BIST_LEARN) *
+                           sizeof(uint32_t));
+        if (sl[k].acc == NULL) {
+            return 2;
+        }
+    }
+    if (setup_channels(dev, o, true, false) != 0) {
+        return 2;
+    }
+    CHECK(bladerf_set_loopback(dev, BLADERF_LB_NONE));
+    CHECK(bladerf_set_rx_mux(dev, BLADERF_RX_MUX_BASEBAND));
+    signal(SIGINT, on_stop_signal);
+    signal(SIGTERM, on_stop_signal);
+    CHECK(bladerf_set_rfic_register(dev, AD9361_REG_BIST_CONFIG, val));
+    if (bladerf_get_rfic_register(dev, AD9361_REG_BIST_CONFIG, &rb) != 0 ||
+        rb != val) {
+        printf("AD9361 BIST config reads back 0x%02x, wrote 0x%02x\n", rb, val);
+        rc = 1;
+    }
+    printf("bist: AD9361 %s at the RX data port (register 0x%03x = 0x%02x), "
+           "%s, %s, %.3f Msps, %.0f s after %.2f s of warm-up\n",
+           o->bist_tone ? "tone" : "PRBS", AD9361_REG_BIST_CONFIG, val,
+           o->fmt_name, o->x2 ? "x2" : "x1", o->rate / 1e6, o->seconds,
+           o->warmup);
+    if (o->in == NULL) {
+        if (bist_pass(dev, o, buf, sl, true, &pos, &t) != 0) {
+            rc = 2;
+            goto out;
+        }
+        for (k = 0; k < nch(o); k++) {
+            bist_learn(&sl[k], k);
+        }
+        if (o->out != NULL) {
+            bist_save(o, sl);
+        }
+    }
+    for (k = 0; k < nch(o); k++) {
+        if (!sl[k].failed && bist_index(&sl[k]) != 0) {
+            rc = 2;
+            goto out;
+        }
+    }
+    if (!sl[0].failed && !sl[nch(o) - 1].failed && !stop_requested) {
+        t = 0;
+        if (bist_pass(dev, o, buf, sl, false, &pos, &t) != 0) {
+            rc = 2;
+        }
+    }
+out:
+    /* the BIST must not outlive this run (in FPGA tuning mode the AD9361
+     * keeps its state across bladerf_open) */
+    if (bladerf_set_rfic_register(dev, AD9361_REG_BIST_CONFIG, 0) != 0 ||
+        bladerf_get_rfic_register(dev, AD9361_REG_BIST_CONFIG, &rb) != 0 ||
+        rb != 0) {
+        fprintf(stderr, "ERROR: could not switch the AD9361 BIST off\n");
+        rc = 2;
+    } else {
+        printf("AD9361 BIST off\n");
+    }
+    if (stop_requested) {
+        printf("stopped by a signal\n");
+        rc = rc ? rc : 1;
+    }
+    k = bist_report(o, sl, t);
+    rc = rc ? rc : k;
+    for (k = 0; k < 2; k++) {
+        free(sl[k].gold);
+        free(sl[k].ix);
+        free(sl[k].acc);
+    }
+    free(buf);
+    printf("RESULT: %s\n", rc == 0 ? "PASS" : "FAIL");
+    return rc;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: hwtest-stream probe|rxcheck|loopback|rxcap|tx|trigger [rx|tx]\n"
+            "usage: hwtest-stream probe|rxcheck|loopback|rxcap|tx|bist|trigger [rx|tx]\n"
             "  -f FMT (sc16 sc16meta sc8 sc8meta packed)  -l x1|x2  -c 1|2\n"
             "  -r RATE  -t SECONDS  -n SAMPLES  -m MUX  -F FREQ  -g GAIN  -O\n"
-            "  -o FILE  -i FILE  -T TONE_HZ  -W WARMUP_S  -d DEVICE  -v (verbose)\n");
+            "  -o FILE  -i FILE  -T TONE_HZ  -W WARMUP_S  -B prbs|tone  -d DEVICE\n"
+            "  -v (verbose)\n");
 }
 
 int main(int argc, char **argv)
@@ -1215,7 +1741,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -1245,6 +1771,13 @@ int main(int argc, char **argv)
             case 'd': o.dev = optarg; break;
             case 'v': bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG); break;
             case 'W': o.warmup = atof(optarg); break;
+            case 'B':
+                if (strcmp(optarg, "tone") != 0 && strcmp(optarg, "prbs") != 0) {
+                    usage();
+                    return 2;
+                }
+                o.bist_tone = strcmp(optarg, "tone") == 0;
+                break;
             default: usage(); return 2;
         }
     }
@@ -1268,6 +1801,8 @@ int main(int argc, char **argv)
         rc = do_tx(dev, &o);
     } else if (strcmp(o.mode, "trigger") == 0) {
         rc = do_trigger(dev, &o);
+    } else if (strcmp(o.mode, "bist") == 0) {
+        rc = do_bist(dev, &o);
     } else {
         usage();
         rc = 2;
