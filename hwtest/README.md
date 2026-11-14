@@ -105,6 +105,30 @@ mode and with either libbladeRF build (9 of 180 runs, one in 20): it streams
 longer than that overruns ("Overrun detected", or in its scheduled part
 "Requested timestamp is in the past"). run-suite.sh counts that as a failure.
 
+Test order matters in two cases (`HWTEST_TX=1` runs of 2026-11-13):
+
+* The FPGA keeps its RX mux setting until the next image load: libbladeRF's
+  open does not reset it, and `test_digital_loopback -l fpga` leaves it at
+  DIGITAL_LOOPBACK. A program that receives afterwards without setting the
+  mux gets the TX samples: a bladeRF-cli receive then stopped when its
+  transmit ended (1,048,576 of 30,000,000 samples) and bladeRF-cli still
+  exited 0.
+* `test_digital_loopback -l rfic` fails the first time it runs after an
+  image load or after another program transmitted (bladeRF-cli: 8-31 % IQ
+  matches, "RX Mismatch detected in block 0"), with Nuand's libbladeRF and
+  with the fixes. It passes when run again, and after receive-only programs
+  or test_digital_loopback in another mode; after test_rx_meta about 20 of
+  its 16,384 samples mismatch. In this mode the test writes and checks only
+  every other sample ("The AD9361 tends to swap channels when
+  loopbacking"), so its result depends on which sample the loopback starts
+  with.
+
+So run-suite.sh runs `digital_loopback_rfic-host` after
+`digital_loopback_fpga-host`, with only `unused_sync-host` in between,
+where it has passed every time, and the TX on/off test (`rx2_txtoggle-*`)
+last in its phase, after an image load, with the RX mux and the loopback set
+first.
+
 A real libbladeRF bug the deep phase hits with the Nios II images:
 test_ctrl's full bandwidth test in FPGA tuning mode fails now and then with
 "Unexpected bandwidth. requested=X, actual=3, readback=X". Many bandwidth
