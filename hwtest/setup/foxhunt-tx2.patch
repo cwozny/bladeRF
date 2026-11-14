@@ -1,0 +1,20 @@
+--- a/hdl/fpga/platforms/bladerf-micro/software/foxhunt/src/main.c
++++ b/hdl/fpga/platforms/bladerf-micro/software/foxhunt/src/main.c
+@@ -43,7 +43,7 @@
+ #define MAX_TONE_COUNT 128
+ 
+ // uncomment to enable bias tee power (e.g. for BT-100)
+-#define BIASTEE 1
++// #define BIASTEE 1  (hwtest: off: no bias voltage on the bench's TX ports)
+ 
+ // Check for buildability
+ #ifndef TONE_GENERATOR_0_BASE
+@@ -204,7 +204,7 @@
+ #endif  // BLADERF_NIOS_LIBAD936X
+ 
+     /* Hardcoded channel */
+-    bladerf_channel channel = BLADERF_CHANNEL_TX(0);
++    bladerf_channel channel = BLADERF_CHANNEL_TX(1);  /* hwtest: TX2, cabled to the B200mini */
+ 
+     /* State */
+     bool run_nios    = true; /* Set 'false' to drop out of the loop */
