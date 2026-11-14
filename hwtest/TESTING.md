@@ -164,9 +164,113 @@ digital_loopback_rfic-host on all images because of test order (open item 3);
 the harness now runs rx2_txtoggle last in its phase with the RX mux set first.
 At 5.8 GHz the bladeRF TX tone measured −57.2 to −58.0 dBFS on all images.
 
-### 7. Sample formats, overclocking, triggers, full-rate soak (2026-11-13 night)
+### 7. Sample formats, overclocking, triggers, full-rate soak (night of 2026-11-13/14)
 
-(Filled in when the campaign has run.)
+libbladeRF main, `HWTEST_TX=1`, harness 0821988d (job `newtests`, plan
+`plans/new-20261114.txt`; results `results/{A,B,C}-new/`). Tools: see
+README.md, "Sample formats, overclocking, triggers".
+
+**Receive at full rate, every sample checked** (`fmt_rx`, 20 s each after
+0.25 s of warm-up; host tuning mode, and one channel also in FPGA tuning
+mode):
+
+| Format | One channel | Two channels | A | B | C |
+|---|---|---|---|---|---|
+| SC16 | 61.44 Msps | 2 × 30.72 Msps | pass | pass | pass |
+| SC16 meta | 61.44 | 2 × 30.72 | pass | pass | pass |
+| SC8 | 61.44 | 2 × 61.44 | pass | pass | pass |
+| SC8 meta | 61.44 | 2 × 61.44 | pass | pass | pass |
+| packed (SC16_Q11_PACKED) | 61.44 | 2 × 40.96 | pass | pass | pass |
+
+No sample lost, duplicated or corrupted in any of the 15 cases per image, the
+two channels always in step. Two-channel SC8 and packed exceed the 80 Msps
+total that libbladeRF recommends (it warns) and still passed.
+
+**Transmit at full rate** (`fmt_txrf`, same formats and rates, TX2 and with
+two channels TX1 into its load; the B200mini receives the tone): all 15 cases
+pass on every image. Tone within +790 to +903 Hz (about 0.9 ppm) of the
+expected frequency, level −31.9 to −33.0 dBFS in every format, images
+−84 to −93 dBc, envelope never more than 0.8 dB below its median: no dropout.
+
+**TX → RX through the FPGA's digital loopback, every sample checked**
+(`fmt_loop`, 10 s):
+
+| Case | A | B | C |
+|---|---|---|---|
+| SC16, one channel, 4 Msps (host, FPGA mode) | pass, pass | pass, pass | pass, pass |
+| SC8, one channel, 4 Msps (host, FPGA mode) | pass, pass | pass, pass | pass, pass |
+| SC8, two channels, 4 Msps | pass | pass | pass |
+| SC16, two channels, 4 Msps | **fail** | **fail** | **fail** |
+| SC16, one channel, 30.72 Msps (host, FPGA mode) | pass, pass | pass, fail (1 error) | pass, pass |
+| SC8, one channel, 40.96 Msps (host, FPGA mode) | pass, fail (1 error) | pass, fail (1 error) | pass, fail (1 error) |
+
+The two-channel SC16 loopback loses samples on every image, Nuand's
+included (a limit of the FPGA's loopback path, not of these changes). The
+single errors at the higher rates were a few samples lost at a fixed point
+~78,000 samples after the start, on every image; the loopback check now skips
+the first 0.25 s (0c7f2915) and was run again (below).
+
+The digital loopback does not run at the sample rate that is set: with
+loopback enabled the FPGA requests TX samples on every `tx_clock` cycle
+(`bladerf-hosted.vhd`, `dac_controls(i).data_req <= (... or
+tx_loopback_enabled)`), so the rate depends on the format and layout. The
+same on A, B and C (rates per channel):
+
+| Case | set | TX side | RX side |
+|---|---|---|---|
+| SC16, one channel | 4 / 30.72 Msps | 5.33 / 40.96 Msps (×4/3) | the same |
+| SC8, one channel | 4 / 40.96 Msps | 6.40 / 65.53 Msps (×1.6) | the same |
+| SC16, two channels | 4 Msps | 4.50 Msps (×9/8) | 4.00 Msps: one sample in nine lost |
+| SC8, two channels | 4 Msps | 5.33 Msps (×4/3) | the same |
+
+So the loopback checks the sample formats over USB in both directions, at
+those rates, but not the sample clock.
+
+**Overclocking** (`oc`, 122.88 Msps, 8-bit, both tuning modes):
+
+| Test | A | B | C |
+|---|---|---|---|
+| Nuand's test_oversample, RX1 and RX2 | pass | pass | pass |
+| counter check, SC8 (FPGA and USB at 122.88 Msps) | pass | pass | pass |
+| counter check, SC8 meta | pass | pass | **fail** (both modes) |
+| RX pulses from the B200mini | fail | fail | fail |
+| TX pulses to the B200mini | fail (carrier check, see below) | fail (same) | fail (same) |
+
+- **RX:** with nothing transmitted, the overclocked 8-bit samples spread over
+  ±76.7 LSB (I) with 5.1–5.5 % at full scale on all three images (±0.5 LSB at
+  61.44 Msps), so the pulses cannot be found. The same on A, B and C: the
+  corruption is not caused by the changes. Nuand's test_oversample passes
+  anyway (it checks timing, power and stuck samples).
+- **TX:** the B200mini finds every pulse, with the right width and interval
+  on all three images (e.g. 1 µs / 10 µs sent: 1.019–1.022 µs / 10.002 µs
+  measured, 24,995–24,996 pulses of 24,996; PRI within 1 ppm). The cases
+  failed only on the carrier check, which my phase-step estimate got wrong
+  (fixed in 0c7f2915, re-run below).
+- **SC8 meta at 122.88 Msps fails on C only:** overrun flags within seconds,
+  timestamp jumps, then the stream stalls ("Transfer timed out"), in both
+  tuning modes, while A and B ran 20 s (2.46 G samples) clean. Without
+  metadata the same counter arrives intact on C. Overclocking is a set of
+  undocumented AD9361 register writes in libbladeRF
+  (`bladerf_set_oversample_register_config`, which also writes 0x03 to
+  bits of register 0x3F6 that the register map says must be 0); the FPGA
+  design has no overclock mode. Being repeated (below).
+
+**Trigger** (`trigger_rx`, master on J51-1): passes on every image in both
+tuning modes; no samples while armed, first samples 4.1–4.6 ms after firing.
+
+**libbladeRF start-up order** (`rx_order-host`, 10 stream starts at
+61.44 Msps with no warm-up): a whole buffer arrived late (nothing lost) in
+3 of 10 starts on A, 5 on B, 4 on C: libbladeRF, not the images.
+
+**Full-rate soaks** (`fullsoak`, one image load each, host tuning mode):
+
+| Image | RX counter, SC16, 61.44 Msps, 60 min | Loopback, SC16, set to 30.72 Msps, 30 min |
+|---|---|---|
+| C | pass: 221,183,311,872 samples, none missing, duplicated or late | pass: 73,730,588,672 samples back (at 40.96 Msps, see above), 0 errors |
+| A | (running) | |
+| B | (to come) | |
+
+(Re-run with 0c7f2915, the overclock repeats and the BIST checks: to come.)
 
 ## Evidence per change
 
