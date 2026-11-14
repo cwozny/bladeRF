@@ -65,6 +65,14 @@ OC_RX_GAIN = 10         # dB (manual)
 OC_B200_TX_GAIN = 60    # dB (cap 65): strong pulses for 8-bit samples
 TX_GAIN = 30            # dB overall (capped at 60 by lib/tx-cap.c)
 TRIES = 3
+SAVE_DIR = None         # --save: keep the first 50 ms of every capture (complex64 .npy)
+
+
+def save_capture(x, fs, what):
+    if SAVE_DIR:
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        np.save(os.path.join(SAVE_DIR, "%s-%s.npy" % (what, time.strftime("%H%M%S"))),
+                x[:int(fs * 0.05)].astype(np.complex64))
 
 # (PW, PRI) in seconds, exact in samples at each transmitter's rate
 OC_RX_CASES = [(1e-6, 10e-6), (10e-6, 100e-6), (100e-6, 1e-3)]       # B200mini at 20 Msps
@@ -120,7 +128,8 @@ def measure_pulses(x, fs, smooth_s):
     symmetric filter: it slows the edges equally, so the 50 % crossings,
     PW and PRI stay), which keeps the noise out of the envelope."""
     w = max(1, int(round(smooth_s * fs)))
-    bb = (x * np.exp(-2j * np.pi * F_OFF * np.arange(len(x)) / fs)).astype(np.complex64)
+    bb0 = (x * np.exp(-2j * np.pi * F_OFF * np.arange(len(x)) / fs)).astype(np.complex64)
+    bb = bb0
     if w > 1:
         k = np.ones(w, dtype=np.float32) / w
         bb = (np.convolve(bb.real, k, mode="same") + 1j * np.convolve(bb.imag, k, mode="same")).astype(np.complex64)
@@ -161,18 +170,26 @@ def measure_pulses(x, fs, smooth_s):
         raise RuntimeError("only %d pulses found" % len(rises))
     pw = (falls - rises) / fs
     pri = np.diff(rises) / fs
-    # carrier: the mean phase step inside the pulses of the mixed-down,
-    # smoothed signal (lag-1 autocorrelation over every pulse), unambiguous
-    # within +-fs/2; the smoothing keeps images and spurs out. (The strongest
-    # spectral line is not reliable: a pulse train's lines are a PRF apart and
-    # neighbouring lines differ by only sinc(PW/PRI), 1.6 % at 10 % duty.)
-    on_s = s.astype(bool)
-    core = on_s & np.roll(on_s, 2 * w) & np.roll(on_s, -2 * w)
-    cm = core[1:] & core[:-1]
+    # carrier: the mean phase step over every pulse of the mixed-down signal
+    # after a 1 us moving average (lag-1 autocorrelation), unambiguous within
+    # +-fs/2. The moving average has nulls at multiples of 1 MHz, so the
+    # transmitter's LO leakage and IQ image (3 and 6 MHz from the tone after
+    # mixing down) drop out; they are continuous and strong in overclocked
+    # transmit, and pulled a shorter average's estimate off by 100-400 kHz.
+    # (The strongest spectral line is not reliable either: a pulse train's
+    # lines are a PRF apart and neighbouring lines differ by only
+    # sinc(PW/PRI), 1.6 % at 10 % duty.)
+    n1 = max(1, int(round(fs * 1e-6)))
+    k1 = np.ones(n1, dtype=np.float32) / n1
+    s1 = (np.convolve(bb0.real, k1, mode="same") + 1j * np.convolve(bb0.imag, k1, mode="same")).astype(np.complex128)
+    span = np.zeros(len(x), dtype=bool)
+    for r, f in zip(rises, falls):
+        span[int(np.ceil(r)):int(np.floor(f)) + 1] = True
+    cm = span[1:] & span[:-1]
     if not cm.any():
         raise RuntimeError("pulses too short to measure the carrier")
-    r = np.sum(bb[1:][cm].astype(np.complex128) * np.conj(bb[:-1][cm].astype(np.complex128)))
-    freq = F_OFF + float(np.angle(r)) * fs / (2 * np.pi)
+    rr = np.sum(s1[1:][cm] * np.conj(s1[:-1][cm]))
+    freq = F_OFF + float(np.angle(rr)) * fs / (2 * np.pi)
     return {
         "pulses": int(len(rises)),
         "pw": pw, "pri": pri,
@@ -262,6 +279,7 @@ def oc_rx_case(u, pw, pri, rate=OC_RATE):
                               "-r", "%d" % rate, "-F", "%d" % FC, "-g", str(OC_RX_GAIN),
                               "-n", "%d" % int(rate * CAPTURE_S), "-o", path], 60)
             x = load_iq(path, True)
+            save_capture(x, rate, "ocrx-%gMsps-pw%gus-pri%gus" % (rate / 1e6, pw * 1e6, pri * 1e6))
     finally:
         stop.set()
         t.join()
@@ -303,6 +321,7 @@ def oc_tx_case(u, pw, pri, rate=OC_RATE, fmt="sc8"):
             time.sleep(3.0)     # open, overclock setup, start
             while m is None and time.time() - t0 < 8.0 and t.is_alive():
                 x = rf.b200_capture(u, int(B200_FS * CAPTURE_S), FC, B200_FS, rf.B200_RX_GAIN)
+                save_capture(x, B200_FS, "octx-%s-%gMsps-pw%gus-pri%gus" % (fmt, rate / 1e6, pw * 1e6, pri * 1e6))
                 try:
                     m = measure_pulses(x, B200_FS, 0.2e-6)
                 except RuntimeError as e:
@@ -378,7 +397,10 @@ def main():
     ap.add_argument("--rate", type=float, default=61.44e6)
     ap.add_argument("--oc-rate", type=float, default=OC_RATE)
     ap.add_argument("--oc-format", choices=["sc8", "sc8meta"], default="sc8")
+    ap.add_argument("--save", help="directory for the first 50 ms of each capture (.npy)")
     a = ap.parse_args()
+    global SAVE_DIR
+    SAVE_DIR = a.save
     if os.environ.get("HWTEST_TX") != "1":
         sys.exit("pulse-check.py transmits: set HWTEST_TX=1 only with the cabling "
                  "in rf-check.py (attenuators, no antennas)")

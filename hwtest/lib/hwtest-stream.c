@@ -1125,6 +1125,11 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     unsigned reports = 0;
     struct bladerf_metadata md;
     double t0, t1, cyc, cyc_max = 0, cyc_sum = 0;
+    /* where the time goes: the timestamp read (a request to the FPGA), the
+     * scheduled read (lead + burst + catching up) and the file write */
+    double ts_lat, ts_lat_sum = 0, ts_lat_max = 0, rx_t, rx_sum = 0, rx_max = 0;
+    double wr_t, wr_sum = 0, wr_max = 0;
+    uint64_t ts_lat_slow = 0, nrx = 0, nwr = 0;
     bool have_ref = false;
     char *buf;
     int rc = 0, status;
@@ -1159,20 +1164,41 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
     while (now() - t0 < o->seconds) {
         uint64_t ts_now = 0, ts, j, v0 = 0;
         bool burst_bad = false;
+        double ta = now();
         CHECK(bladerf_get_timestamp(dev, BLADERF_RX, &ts_now));
+        ts_lat = now() - ta;
+        ts_lat_sum += ts_lat;
+        if (ts_lat > ts_lat_max) {
+            ts_lat_max = ts_lat;
+        }
+        if (ts_lat > 1e-3) {
+            ts_lat_slow++;
+        }
         ts = ts_now + lead;
         memset(&md, 0, sizeof(md));
         md.timestamp = ts;                  /* scheduled, not RX_NOW */
+        ta = now();
         status = bladerf_sync_rx(dev, buf, (unsigned)total, &md, TIMEOUT_MS);
+        rx_t = now() - ta;
         bursts++;
         if (status == BLADERF_ERR_TIME_PAST) {
+            uint64_t ts_after = 0;
             past++;
             bad++;
+            bladerf_get_timestamp(dev, BLADERF_RX, &ts_after);
             if (reports++ < MAX_REPORTS) {
-                printf("  burst %" PRIu64 ": timestamp 0x%" PRIx64 " already past\n",
-                       bursts, ts);
+                printf("  burst %" PRIu64 ": timestamp 0x%" PRIx64 " already past (timestamp "
+                       "read took %.2f ms; the read gave up after %.2f ms; %.2f ms later "
+                       "the FPGA was %.2f ms past it)\n", bursts, ts, 1e3 * ts_lat,
+                       1e3 * rx_t, 1e3 * (now() - ta - rx_t),
+                       1e3 * ((double)(int64_t)(ts_after - ts)) / o->rate);
             }
             continue;
+        }
+        nrx++;
+        rx_sum += rx_t;
+        if (rx_t > rx_max) {
+            rx_max = rx_t;
         }
         if (status != 0) {
             fprintf(stderr, "ERROR: burst %" PRIu64 ": bladerf_sync_rx: %s\n",
@@ -1225,12 +1251,20 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
             samples += per;
         }
         if (o->out != NULL) {
-            FILE *f = fopen(o->out, "wb");
+            FILE *f;
+            ta = now();
+            f = fopen(o->out, "wb");
             if (f == NULL || fwrite(buf, sample_bytes(o->fmt), (size_t)total, f) != total ||
                 fclose(f) != 0) {
                 fprintf(stderr, "ERROR: cannot write %s\n", o->out);
                 rc = 2;
                 break;
+            }
+            wr_t = now() - ta;
+            nwr++;
+            wr_sum += wr_t;
+            if (wr_t > wr_max) {
+                wr_max = wr_t;
             }
         }
         if (o->gap_ms > 0) {
@@ -1249,6 +1283,11 @@ static int do_rxsched(struct bladerf *dev, struct opts *o)
            "schedule), %" PRIu64 " samples per channel checked; burst cycle %.1f ms "
            "mean, %.1f ms max\n", bursts, bad, past, samples,
            bursts ? 1e3 * cyc_sum / (double)bursts : 0.0, 1e3 * cyc_max);
+    printf("rxsched: timestamp read %.2f ms mean, %.2f ms max, %" PRIu64 " over 1 ms; "
+           "scheduled read %.1f ms mean, %.1f ms max; file write %.1f ms mean, %.1f ms max\n",
+           bursts ? 1e3 * ts_lat_sum / (double)bursts : 0.0, 1e3 * ts_lat_max, ts_lat_slow,
+           nrx ? 1e3 * rx_sum / (double)nrx : 0.0, 1e3 * rx_max,
+           nwr ? 1e3 * wr_sum / (double)nwr : 0.0, 1e3 * wr_max);
     if (rc == 0 && (bad != 0 || bursts == 0)) {
         rc = 1;
     }

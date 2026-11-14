@@ -261,7 +261,11 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   the timestamp from burst to burst.
 * `pulse-check.py oc-rx` and `oc-tx` take `--oc-rate` (the overclocked rate,
   default 122.88 Msps); `oc-tx --oc-format sc8meta` transmits the pulses
-  with metadata (one burst started "now"), as phase `oc` also does.
+  with metadata (one burst started "now"), as phase `oc` also does;
+  `--save DIR` keeps the first 50 ms of every capture. The carrier is the
+  mean phase step over the pulses after a 1 us moving average, whose nulls
+  at multiples of 1 MHz remove the transmitter's LO leakage and IQ image
+  (3 and 6 MHz from the tone after mixing down).
 * **trigger** arms the RX trigger with this bladeRF as master (J51-1), checks
   that no samples arrive in 1 s, fires it and checks that samples then arrive
   and the trigger reports fired. The counter modes bypass the trigger gate,
