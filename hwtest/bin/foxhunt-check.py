@@ -24,7 +24,10 @@ replaced by the official image afterwards (recover.sh).
 The B200mini records SECONDS starting just before the load (RX2 port,
 915 MHz - 20 kHz, 100 ksps). A capture passes if
   - the tone is 937.5 Hz from the bladeRF's carrier (its LO leakage), within
-    3 Hz (the sign, i.e. the sideband, is reported)
+    2 Hz (the sign, i.e. the sideband, is reported); both are measured from
+    phase slopes, each key-down run against the carrier's frequency at that
+    moment (both drift by tens of Hz in a minute: the VCTCXO with the
+    firmware's fixed trim, against the B200mini's clock)
   - every complete message decodes to "PARIS PARIS", and there is one
   - the dot length (mean of a dot and a one-unit gap: the tone starts and
     stops at zero crossings, which lengthens dots and shortens gaps by up to
@@ -65,7 +68,7 @@ RX_OFFSET = -20e3       # B200mini tuned 20 kHz below it, away from its own DC
 FS = 100e3              # B200mini sample rate
 B200_RX_GAIN = 6        # dB: about -22 dBm from TX2 (10 dB attenuation, 20 dB pad)
 TONE_HZ = 937.5         # above the carrier
-TONE_TOL_HZ = 3.0
+TONE_TOL_HZ = 2.0
 UNIT_S = 0.120          # the firmware's 240 ms dot, counted at twice the sample rate
 UNIT_TOL = 0.01
 ON_OFF_DB = 20
@@ -103,6 +106,25 @@ def envelope(x, f):
     m = len(x) // n
     bb = x[:m * n] * np.exp(-2j * np.pi * f * np.arange(m * n) / FS)
     return np.abs(bb.reshape(m, n).mean(axis=1))
+
+
+def seg_freqs(x, segs, f0, block_ms=5):
+    """[(mid time s, frequency Hz, weight)] near f0 from the phase slope
+    inside each [a, b) range of samples (mixed down by f0, averaged over
+    block_ms); the weight is the length cubed (the variance of a slope
+    estimate falls that way)."""
+    n = int(FS * block_ms / 1000)
+    out = []
+    for a, b in segs:
+        m = (b - a) // n
+        if a < 0 or b > len(x) or m < 10:
+            continue
+        ph0 = (np.arange(a, a + m * n, dtype=np.float64) * (f0 / FS)) % 1.0
+        bb = (x[a:a + m * n] * np.exp(-2j * np.pi * ph0)).reshape(m, n).mean(axis=1)
+        phase = np.unwrap(np.angle(bb))
+        slope = np.polyfit(np.arange(m) * block_ms / 1000, phase, 1)[0] / (2 * np.pi)
+        out.append(((a + m * n / 2) / FS, f0 + slope, float(m) ** 3))
+    return out
 
 
 def runs(on):
@@ -224,6 +246,37 @@ def analyze(x):
     m["dash_over_dot"] = round(float(np.mean(dashes) / np.mean(dots)), 3) if dots and dashes else None
     m["gap_s"] = round(float(np.mean(gaps1)), 4) if gaps1 else None
     m["first_tone_s"] = round(rs[0][2] * ENV_MS / 1000, 3) if not rs[0][0] else 0.0
+
+    # The tone's offset from the carrier, from phase slopes: the tone over its
+    # key-down runs, the carrier (LO leakage) over the silences with TX on
+    # before and after each message. (The spectrum peaks above are only
+    # coarse: the keying spreads the tone and the leakage is weak.)
+    spm = int(FS / 1000)
+    tone_segs = [((s + 3) * spm, (s + n - 3) * spm) for st, s, n in rs if st and n > 20]
+    lo_segs = []
+    for msg in msgs:
+        t0 = int(round(msg["start"] * 1000))
+        t1 = int(round((msg["start"] + sum(e[2] for e in msg["elements"])) * 1000))
+        if t0 >= 500:
+            lo_segs.append(((t0 - 450) * spm, (t0 - 50) * spm))
+        if msg["complete"]:
+            lo_segs.append(((t1 + 50) * spm, (t1 + 1250) * spm))
+    # Both drift by tens of Hz during a capture (the bladeRF's VCTCXO with
+    # the firmware's fixed trim, against the B200mini's clock), so each tone
+    # run is compared with the carrier at the same moment, from a fit of the
+    # carrier frequency over time.
+    tf, lf = seg_freqs(x, tone_segs, f_tone), seg_freqs(x, lo_segs, f_lo)
+    if tf and len(lf) >= 2:
+        lt = np.array([p[0] for p in lf])
+        deg = 2 if len(lf) >= 4 and lt.max() - lt.min() > 20 else 1
+        fit = np.polyfit(lt, [p[1] for p in lf], deg)
+        off = [(f - np.polyval(fit, t), w) for t, f, w in tf if lt.min() - 5 <= t <= lt.max() + 5]
+        if off:
+            m["tone_above_carrier_hz"] = round(sum(o * w for o, w in off) / sum(w for o, w in off), 3)
+            m["tone_offset_spread_hz"] = round(float(np.std([o for o, w in off])), 3)
+        m["carrier_offset_hz"] = round(float(np.polyval(fit, lt.min())) + RX_OFFSET, 2)
+        m["carrier_drift_hz"] = round(float(np.polyval(fit, lt.max()) - np.polyval(fit, lt.min())), 2)
+        m["carrier_drift_over_s"] = round(float(lt.max() - lt.min()), 1)
 
     # Carrier leakage with TX on (silences inside messages) and off (between)
     lo_env = 20 * np.log10(envelope(x, f_lo) + 1e-12)
