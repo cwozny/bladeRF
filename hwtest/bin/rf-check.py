@@ -259,6 +259,17 @@ def check_tx(u, point):
                     if time.time() - t0 < 8.0 and t.is_alive():
                         m = None
                         time.sleep(0.5)
+            if m is not None and t.is_alive():
+                # The first capture with the tone can straddle the start of
+                # the transmission (and the LO settling) and read low and
+                # off-frequency: measure the next one, which lies wholly
+                # inside the transmission (the file plays for 10 s)
+                first = m
+                rx = b200_capture(u, int(fs * 0.05), fc, fs, B200_RX_GAIN)
+                m = analyze(rx, fs, f_off)
+                m.update(direction="bladerf_tx", fc=fc, fs=fs, f_off=f_off,
+                         tone_after_s=first["tone_after_s"],
+                         first_tone_dbfs=first["tone_dbfs"])
         finally:
             t.join()
         if "error" in result:
