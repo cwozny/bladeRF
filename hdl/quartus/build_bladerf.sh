@@ -361,7 +361,7 @@ fi
 
 nios_rev=$(echo "$nios_rev" | tr "[:upper:]" "[:lower:]")
 if [ "$nios_rev" != "tiny" ] && [ "$nios_rev" != "fast" ]; then
-    echo -e "\nInvalid Nios II revision: $nios_rev\n" >&2
+    echo -e "\nInvalid core implementation: $nios_rev (Tiny or Fast)\n" >&2
     exit 1
 fi
 
