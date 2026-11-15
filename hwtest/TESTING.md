@@ -1,12 +1,26 @@
 # How the bladeRF 2.0 micro changes were tested
 
-This is the test record for the changes on the fork's branches `niosv`
-(building the bladeRF 2.0 micro FPGA with Quartus 25.1, which needs the
-Nios V CPU; `niosv-foxhunt` adds the foxhunt revision's firmware) and
-`fixes` (libbladeRF and firmware bug fixes). It says what was
-tested, how, on which FPGA images and libbladeRF builds, and what the results
-were. It is the source for the "Testing" sections of the pull requests and
-issue reports, and tells how to repeat each test.
+This is the test record for the changes on these branches of the fork, each
+based on Nuand's master 35174c30:
+
+- `niosv`: builds the bladeRF 2.0 micro FPGA with Quartus 25.1, which needs
+  the Nios V CPU, for all of the micro's revisions (hosted, wlan, adsb,
+  foxhunt). It includes the two firmware fixes the port needed: the VCTCXO
+  tamer interrupt (an out-of-bounds write that is harmless in the Nios II
+  build but hits live data in the Nios V build) and the assert macro
+  (newlib-nano).
+- `host-fixes`: four libbladeRF fixes and a test_scheduled_retune fix, for
+  problems these tests found that occur with Nuand's own image and
+  libbladeRF too, independent of the Nios V port.
+- `adsb-fix`: two HDL fixes that let the adsb revision build again; Nuand's
+  master fails to build it with Quartus 23.1.1 too.
+- `hwtest`: this harness. It is not meant to be merged; it also carries the
+  test_scheduled_retune fix and a `BUILD_BLADERF_UPDATE` option (configure
+  the host software without libcurl) for its own builds.
+
+It says what was tested, how, on which FPGA images and libbladeRF builds, and
+what the results were. It is the source for the "Testing" sections of the
+pull requests and issue reports, and tells how to repeat each test.
 
 Raw results are on the test host (XPS 13) under
 `~/workarea/hwtest-data/results/<label>/<time>/`: one log per test,
@@ -48,18 +62,24 @@ receiver sees more than about −20 dBm.
 | Label | Image | Built with | CPU | md5 of hostedxA5.rbf |
 |---|---|---|---|---|
 | A | Nuand's official FPGA v0.16.0 | (Nuand) | Nios II/e | `be0909dc27b48a08c54db33675130f27` |
-| B | branch `niosv`, Nios II path (Nuand's design) | Quartus Prime Lite 23.1.1 | Nios II/e | `7ab1c8f913ae8a356de988728ceeb0f7` |
-| C | branch `niosv`, Nios V | Quartus Prime Lite 25.1 | Nios V/m, non-pipelined | `b39357947802307a8aa156d5819e721d` |
+| B | branch `niosv` (work-in-progress commit d984883b, not on the fork), Nios II path (Nuand's design) | Quartus Prime Lite 23.1.1 | Nios II/e | `7ab1c8f913ae8a356de988728ceeb0f7` |
+| C | branch `niosv` at d5c3c202, Nios V | Quartus Prime Lite 25.1 | Nios V/m, non-pipelined | `b39357947802307a8aa156d5819e721d` |
 
 B shows that the restructured Qsys script still builds Nuand's Nios II design
-(same fit and timing as A); C is the Quartus 25.1 build the PR is for.
+(same fit and timing as A); C is the Quartus 25.1 build the PR is for. The
+commits after C do not change these images: 99f1b2d5 adds a message to
+build_bladerf.sh, 54a2a77a moves the Nios V firmware build into
+`niosv_app.cmake` (the hosted RAM image stays byte-identical) and 3cb48e29
+adds the foxhunt firmware. For a Nios II build d984883b has the final
+branch's code: what changed after it is the Nios V build, build_bladerf.sh,
+documentation and an `#undef assert` that has no effect on a Nios II build.
 
 ## libbladeRF builds
 
 | Name | Source | Used for |
 |---|---|---|
 | main | Nuand master 35174c30 plus this harness (branch `hwtest`, which also carries the test_scheduled_retune fix) | baseline: what Nuand's users have |
-| fixes | main plus the four libbladeRF fixes (b49041c9, e9463ba9, fdb03b4e, 3b60e59e); its libbladeRF is identical to branch `fixes` at 3b60e59e | verifying the fixes |
+| fixes | main plus the four libbladeRF fixes of branch `host-fixes` (b49041c9, 53632d98, 16eadeb5, cd405004); built from the earlier branch `fixes` at 3b60e59e, whose libbladeRF is identical | verifying the fixes |
 
 The fixes build was deleted after use (2026-11-13); to rebuild it, make a
 detached worktree of `hwtest`, cherry-pick those four commits and run
@@ -553,8 +573,8 @@ buffers hold at that rate. More buffers would absorb both.
 
 ### 11. The micro's other revisions: wlan, adsb, foxhunt (builds, 2026-11-14)
 
-Built with Quartus Prime Lite 25.1 (Nios V) from `niosv` (wlan, adsb) and
-`niosv-foxhunt` (foxhunt), with Nuand's code (master 35174c30) built with
+Built with Quartus Prime Lite 25.1 (Nios V) from `niosv`, at 99f1b2d5 (wlan,
+adsb) and 3cb48e29 (foxhunt), with Nuand's code (master 35174c30) built with
 23.1.1 (Nios II) as the reference, same fitter seed:
 
 | Revision | Build | Logic | Worst setup | Worst recovery |
@@ -564,8 +584,8 @@ Built with Quartus Prime Lite 25.1 (Nios V) from `niosv` (wlan, adsb) and
 | adsb xA4 | Nuand + adsb fix, 23.1.1 | 15,884 ALMs (86 %) | −2.814 ns | +0.914 ns |
 | adsb xA4 / xA5 / xA9 | ours + adsb fix, 25.1 | 16,433 (89 %) / 16,735 (58 %) / 16,718 (15 %) | −1.737 / −2.526 / −1.938 ns | +0.526 / +0.990 / +0.073 ns |
 | foxhunt xA4 | Nuand, 23.1.1, Nios II | 5,614 ALMs (30 %) | +1.438 ns | +3.208 ns |
-| foxhunt xA4 | niosv-foxhunt, 23.1.1, Nios II | identical to Nuand's | | |
-| foxhunt xA4 / xA9 / xA5 | niosv-foxhunt, 25.1, Nios V | 6,667 (36 %) / 6,641 (6 %) / 6,645 (23 %) | +1.046 / +0.427 / −0.012 ns | +3.866 / +4.004 / +3.348 ns |
+| foxhunt xA4 | niosv 3cb48e29, 23.1.1, Nios II | identical to Nuand's | | |
+| foxhunt xA4 / xA9 / xA5 | niosv 3cb48e29, 25.1, Nios V | 6,667 (36 %) / 6,641 (6 %) / 6,645 (23 %) | +1.046 / +0.427 / −0.012 ns | +3.866 / +4.004 / +3.348 ns |
 
 - **wlan** needs Nuand/bladeRF-wiphy (8623814) next to the bladeRF tree and
   its IP generated (`fpga/ip/generate.sh`): the FFT and Viterbi cores
@@ -577,7 +597,7 @@ Built with Quartus Prime Lite 25.1 (Nios V) from `niosv` (wlan, adsb) and
   logic (upstream draft 13; `recovery-groups.tcl`).
 - **adsb** has not built since 2025.05 (upstream draft 12): it needs
   Nuand/bladeRF-adsb in `hdl/fpga/ip/nuand/adsb` and two one-line fixes
-  (branch `adsb-fix-master`), applied to the working trees for these builds.
+  (branch `adsb-fix`), applied to the working trees for these builds.
   The setup misses are in the ADS-B decoder, filters and preamble detector
   at the sample clock's 125 MHz constraint, worst in Nuand's own build;
   bladeRF_adsb runs at 16 Msps (32 MHz).
@@ -596,7 +616,7 @@ before the load and decodes the Morse code. Nuand's foxhunt firmware
 transmits on TX1, which the bench terminates, and switches on the TX bias
 tee, which would put DC on the cabled port, so both images under test were
 built with `setup/foxhunt-tx2.patch` (TX2, through 20 dB to the B200mini;
-bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
+bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv 3cb48e29
 + patch, 25.1, Nios V. Job `after7` and a trial run
 (`foxhunt/1114-1714`, `foxhunt/trial-1114-1647`; numbers from
 `--analyze` of the saved captures, harness 1d7a0e63):
@@ -631,7 +651,9 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
 
 ## Evidence per change
 
-### Quartus 25.1 build of the bladeRF 2.0 micro (Nios V), branch `niosv`
+### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
+
+#### The Quartus 25.1 build (Nios V)
 
 - Builds: xA4, xA5, xA9 with Quartus Prime Lite 25.1 (section 2); the
   micro's other revisions, wlan xA9, adsb xA4/xA5/xA9 (with Nuand's decoder
@@ -645,7 +667,27 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
   with the same fit and timing as A, and passes the same tests.
 - Only one board (xA5) was tested on hardware; xA4 and xA9 were built only.
 
-### niosv-foxhunt 54a2a77a, 3cb48e29: share the Nios V firmware build; build the foxhunt firmware for Nios V
+#### 303b678a nios: don't register an ISR for a VCTCXO tamer without an IRQ
+
+- On the micro, `VCTCXO_TAMER_0_IRQ` is −1, and `alt_ic_isr_register()`
+  stores the handler in `alt_irq[-1]`, the 8 bytes before the table. Found by
+  reading the Nios V port's memory map. In every Nios II build, Nuand's
+  v0.16.0 included, those bytes are the end of the RX retune queue, which is
+  written before it is read, so the write has done no harm. In every Nios V
+  build of the branch (hosted, wlan, adsb and foxhunt; xA4, xA5 and xA9) they
+  are `adf400x_reg[2]` and `[3]`, the firmware's copy of the ADF400x
+  registers, which the host reads back. So the port needs the fix, and it is
+  on `niosv` rather than `host-fixes`.
+- Images B and C have the change and pass everything A passes (sections 3 to
+  7).
+
+#### faf362d8 nios: let the firmware's assert replace the C library's
+
+- Needed for the Nios V build only: newlib-nano's headers include
+  `<assert.h>`, so the firmware's own `assert` is a redefinition, which
+  `-Werror` turns into an error. A Nios II build is unchanged.
+
+#### 54a2a77a, 3cb48e29: share the Nios V firmware build; build the foxhunt firmware for Nios V
 
 - 54a2a77a moves the application-independent part of the Nios V firmware
   build into `niosv_app.cmake`: the hosted revision's RAM image is
@@ -660,7 +702,15 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
   Nuand's Nios II build: same text, timing, frequency and level; only its
   10 s pause between messages is exactly 10 s (14.0 s on the Nios II/e).
 
-### b49041c9 libbladeRF: discard stale Nios responses
+### Branches `host-fixes` and `adsb-fix`: problems that occur with Nuand's code too
+
+These problems do not depend on the Nios V port. The tests ran on the earlier
+branch `fixes`, which also had the VCTCXO tamer fix; `host-fixes` has the
+same commits without it, with the same libbladeRF code: 7eabdcb3, e9463ba9,
+fdb03b4e and 3b60e59e there are 2483428a, 53632d98, 16eadeb5 and cd405004
+here.
+
+#### b49041c9 libbladeRF: discard stale Nios responses
 
 - Symptom: `test_ctrl -T fpga -t bandwidth` (full sweep) fails 2 to 25 times
   per run with images A and B ("Unexpected bandwidth ... actual=3").
@@ -674,35 +724,42 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
   slower: 370.5 s without and 376.8 s with the fix, traced back to back
   (`results/bw-diag/20261113-161738`, `-162354`).
 
-### e9463ba9 libbladeRF: enable both channels of a MIMO layout in FPGA tuning mode too
+#### 53632d98 libbladeRF: enable both channels of a MIMO layout in FPGA tuning mode too
 
 - Without the fix, `test_rx_meta -m` and `-b 8 -m` fail in FPGA tuning mode
   with every image (A, B, C); with it they pass on all three (sections 4, 6).
 
-### fdb03b4e libbladeRF: initialize the RFIC again after an FPGA load in host tuning mode
+#### 16eadeb5 libbladeRF: initialize the RFIC again after an FPGA load in host tuning mode
 
 - Without the fix, `test_fpga_load` fails in host tuning mode with every image
   ("Calibration TIMEOUT"); with it, it passes on A, B and C (section 6,
   fpga_load-host), and in FPGA tuning mode as before.
 
-### 3b60e59e libbladeRF: host tuning mode: MIMO enable uses the layout of the channel's direction
+#### cd405004 libbladeRF: host tuning mode: MIMO enable uses the layout of the channel's direction
 
 - bladeRF-cli receives 3 s on RX1+RX2 at 5 Msps while TX1 sends 0.2 s:
   without the fix the receive stops when the transmit ends (2,228,224 of
   30,000,000 samples); with it all 30,000,000 samples arrive, in both tuning
   modes (rx2_txtoggle-host/-fpga, section 6, on A, B and C).
 
-### 923d1b36 (= niosv 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
-
-- Found by reading the Nios V port's memory map: `alt_irq[-1]` overwrote the
-  last 8 bytes of the RX retune queue in the Nios II build. Images B and C
-  have the change and pass everything A passes (sections 3 to 7).
-
-### 7eabdcb3 test_scheduled_retune: tune before reading the start timestamp; 64 RX buffers
+#### 2483428a test_scheduled_retune: tune before reading the start timestamp; 64 RX buffers
 
 - Before: "Requested timestamp is in the past" with the official image. After:
   passes in every run since, all images, both tuning modes, e.g. 135 times in
   a row in the C transmit soak.
+
+#### adsb-fix f75850cf, 610ad6e2: tie off fifo_writer's highly_packed_mode_en; size the 12-bit packing buffer from the FIFO width
+
+- Nuand's master does not build the adsb revision (since 2025.05, with
+  Quartus 23.1.1 too): rx-adsb.vhd leaves fifo_writer's new
+  `highly_packed_mode_en` port open ("Error (10346) ... must have actual or
+  default value"; f75850cf ties it low), and fifo_writer's 96-bit packing
+  buffer is narrower than the adsb revision's 128-bit sample FIFO ("Error
+  (10393) ... fifo_writer.vhd(567): left bound (127) of slice must belong to
+  range (95 downto 0)"; 610ad6e2 sizes it FIFO_DATA_WIDTH + 32 bits, still
+  96 for the other revisions).
+- With both, adsb builds: Nuand's code with Quartus 23.1.1 (xA4) and `niosv`
+  with 25.1 (xA4, xA5, xA9) (section 11). Built only, not run on hardware.
 
 ## Known noise and open items
 
@@ -728,6 +785,14 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv-foxhunt
    twice the speed its firmware asks for, and Nuand's Nios II/e `usleep()`
    runs about 40 % long (section 12); the wlan revision fails recovery timing
    and the adsb revision setup timing in Nuand's own builds (section 11).
+8. Channel 1 has not been checked at RF. Since the transmit cabling, RX2 and
+   TX2 face the B200mini and RX1 and TX1 are terminated, so every RF test
+   (rf-check, the transmit format cases, the pulses, foxhunt) used channel 2.
+   Channel 1 has had the digital checks: every sample of both channels through
+   the FPGA and USB (and with the BIST across the LVDS interface), and
+   test_ctrl's frequency, bandwidth and sample rate sweeps, which set only
+   channel 1 (its gain test sets both). No test has measured both channels'
+   RF at the same time.
 
 ## How to repeat
 

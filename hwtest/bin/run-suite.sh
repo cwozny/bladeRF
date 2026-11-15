@@ -48,8 +48,8 @@
 # Environment: HOST_BUILD selects the libbladeRF build under test (default
 # $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
 # out (logged, not in summary.jsonl); HWTEST_FIXES=1 says HOST_BUILD has the
-# libbladeRF fixes on branch fixes and also runs what fails with every image
-# without them (see README.md): two-channel receive in FPGA tuning mode,
+# libbladeRF fixes of branch host-fixes and also runs what fails with every
+# image without them (see README.md): two-channel receive in FPGA tuning mode,
 # test_fpga_load in host tuning mode and, with HWTEST_TX=1, TX on/off during a
 # two-channel receive. HWTEST_FPGA_MIMO=1 is its older name.
 #

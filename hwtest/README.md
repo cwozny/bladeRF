@@ -56,8 +56,8 @@ phase repeats a mixed workload for `SOAK_MINUTES`.
 Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
 (the libbladeRF build under test, default `host-build`), `HWTEST_SKIP=<test>,...`
 (left out, logged), `HWTEST_FIXES=1` (`HOST_BUILD` has the libbladeRF fixes on
-branch `fixes`: also run the tests below that fail with every image without
-them; `HWTEST_FPGA_MIMO=1` is its older name), `SOAK_MINUTES`,
+branch `host-fixes`: also run the tests below that fail with every image
+without them; `HWTEST_FPGA_MIMO=1` is its older name), `SOAK_MINUTES`,
 `FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and `BIST_MIN`.
 
 Things that fail with every image, including the official one, so the
@@ -72,8 +72,9 @@ harness does not run them that way:
   sample rate change then times out in the AD9361's RX baseband filter
   calibration (`Calibration TIMEOUT (0x16, 0x80)`). The fpga phase runs it in
   FPGA tuning mode, where the Nios starts from scratch after the reload.
-  Branch `fixes` sets the AD9361 up again after a load, and then it passes
-  with all three images (`fpga_load-host`, run with `HWTEST_FIXES=1`).
+  Branch `host-fixes` sets the AD9361 up again after a load, and then it
+  passes with all three images (`fpga_load-host`, run with
+  `HWTEST_FIXES=1`).
 * The full test_ctrl sweeps in host tuning mode take over 1.5 hours per image
   (the sample rate sweep alone about 50 minutes).
 * `test_rx_meta -m` (both RX channels) in FPGA tuning mode: right after the
@@ -83,7 +84,7 @@ harness does not run them that way:
   the harness runs it. In FPGA tuning mode libbladeRF enables the two RX
   channels one at a time, and enabling the second resets the receive path
   under the running stream; host tuning mode enables both at once. Branch
-  `fixes` does the same in FPGA tuning mode, and then it passes
+  `host-fixes` does the same in FPGA tuning mode, and then it passes
   (`HWTEST_FIXES=1`).
 * TX on or off during a two-channel receive, in host tuning mode: libbladeRF
   decides whether to switch both channels of a direction together from the
@@ -91,9 +92,9 @@ harness does not run them that way:
   or disabling TX also switches both RX channels. When a transmit ends the
   receive stops ("Transfer timed out for RX buffer"; 3 s on RX1+RX2 while
   TX1 sent 0.2 s got 2.2 M of 30 M samples), and a TX_X2 layout never
-  enables both TX channels. Branch `fixes` uses the layout of the channel's
-  own direction (`rx2_txtoggle-host` and `-fpga`, run with `HWTEST_FIXES=1`
-  and `HWTEST_TX=1`).
+  enables both TX channels. Branch `host-fixes` uses the layout of the
+  channel's own direction (`rx2_txtoggle-host` and `-fpga`, run with
+  `HWTEST_FIXES=1` and `HWTEST_TX=1`).
 * test_ctrl's `threads` case in host tuning mode: test_ctrl refuses it on
   the bladeRF 2.0 (Nuand issue #705). The harness runs it in FPGA tuning
   mode only, but there it failed both times with the official image
@@ -147,7 +148,7 @@ time-out. `bin/bw-diag.sh <image labels>` reproduces it with every Nios packet
 logged and timed (LD_PRELOAD shim `lib/nios-trace.c`). `lib/late-reply.c`
 (LD_PRELOAD) reproduces it deterministically by delaying every Nth RFIC
 status response, e.g. `LATE_REPLY_EVERY=20` with `test_ctrl -T fpga -t
-bandwidth -f`: 17 failures without the fix on branch `fixes`, none with it.
+bandwidth -f`: 17 failures without the fix (b49041c9), none with it.
 On the hardware, with the fix the full bandwidth sweep passed with all
 three images (2026-11-13, `HWTEST_TX=1` runs `*-tx-fixes`), and it is no
 slower: traced back to back with the Nios V image, 370 s without the fix and
