@@ -448,6 +448,7 @@ gain makes about -50 dBm there).
 | `bin/twoch-check.py` | Both RX channels, or both TX channels, at once through a splitter against the B200mini: levels, phase, sample alignment, gain independence, single vs two channels |
 | `bin/rf-lowband.py` | rf-check's TX and RX checks on the `HWTEST_RF_CH` channel at 70 to 433 MHz (where TX1 dips, TESTING.md section 13) |
 | `bin/tx-startup.py` | Records the first seconds of bladeRF transmissions with the B200mini (the start-up bursts, TESTING.md section 13) |
+| `bin/ctrl-threads-nuand.sh` | test_ctrl's threads case as Nuand's release checklist runs it: no TX cap, no time limit (needs every TX port on a load or behind >= 40 dB, and `HWTEST_TX_UNCAPPED_OK=1`) |
 | `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |

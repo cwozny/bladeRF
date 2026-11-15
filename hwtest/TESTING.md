@@ -861,11 +861,24 @@ here.
      sweeps queue on the Nios (one gain sweep takes ~4.5 s alone, one
      bandwidth sweep ~14 s).
 
-   The command time-outs are not the harness's. They look like libbladeRF's
-   RFIC command handling under concurrent use: `_rfic_fpga_spinwait` polls
-   the Nios's work queue 30 times, 100 µs apart, while one bandwidth change
-   keeps the Nios busy for up to ~290 ms. Not investigated further; left out
-   of unattended runs.
+   Run as Nuand's release checklist runs it (`bin/ctrl-threads-nuand.sh`:
+   no TX cap or other preload, no time limit, Nuand's libbladeRF; TX1
+   through 40 dB to the B200mini, the other ports on loads; the fast
+   variant, `-f`), the test completes on both images and fails on both
+   alike (`results/ctrlthreads-nuand-1115-1044/`):
+
+   | Image | Time | Failures (test_ctrl's count) | Nios command time-outs | Wrong gain readbacks | Stream failures |
+   |---|---|---|---|---|---|
+   | C | 493 s | 17 | 9 | 0 | 1 (TX) |
+   | A | 610 s | 18 | 11 | 7 | 1 (TX) |
+
+   So the failure is Nuand's, not the harness's: frequency and gain changes
+   time out when the threads use the Nios together (`_rfic_fpga_spinwait`
+   polls the Nios's work queue 30 times, 100 µs apart, while one bandwidth
+   change keeps it busy for up to ~290 ms), readbacks then disagree (on A
+   once by a completely different frequency, as the stale-reply bug of
+   b49041c9 would produce), and the TX stream drops once. The full variant (without `-f`, 3-4 hours per
+   image) was not run. Left out of unattended runs.
 5. Nuand's foxhunt firmware as it is (TX1, TX bias tee on) has not been run:
    the bench terminates TX1 and has no DC block. The bench images differ
    from it in those two lines only (section 12).
