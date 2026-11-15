@@ -445,6 +445,8 @@ gain makes about -50 dBm there).
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
 | `bin/pulse-check.py` | Overclocked pulse trains both ways, and full-rate TX in every sample format, against the B200mini |
 | `bin/twoch-check.py` | Both RX channels, or both TX channels, at once through a splitter against the B200mini: levels, phase, sample alignment, gain independence, single vs two channels |
+| `bin/rf-lowband.py` | rf-check's TX and RX checks on the `HWTEST_RF_CH` channel at 70 to 433 MHz (where TX1 dips, TESTING.md section 13) |
+| `bin/tx-startup.py` | Records the first seconds of bladeRF transmissions with the B200mini (the start-up bursts, TESTING.md section 13) |
 | `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |

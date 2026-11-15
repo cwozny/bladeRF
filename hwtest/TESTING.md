@@ -650,6 +650,74 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv 3cb48e29
 - Each image transmits until the next load; `recover.sh` put the official
   image back afterwards.
 
+### 13. Channel 1 at RF (2026-11-15)
+
+Every earlier RF test used channel 2. For these runs the two B200mini cables
+moved to channel 1 (TX1 → 20 dB → B200mini RX2, B200mini TX/RX → 20 dB →
+RX1, loads on TX2 and RX2) and `HWTEST_RF_CH=1` made the RF scripts use RX1
+and TX1: libbladeRF main, both tuning modes, images A and C. Campaign `ch1`
+(harness 4531099e, `results/{A,C}-ch1/`: phases rf, formats, oc), repeats of
+its two single failures (`results/ch1-repeat-1115-0834/`), a repro of one
+of them (`results/tx433-1115-0849/`), and the RF tests again with the
+corrected harness (feeb443d, `results/{A,C}-ch1b/`; the digital tests,
+which do not depend on the cabling, skipped).
+
+**C against A on channel 1: the same as on channel 2.**
+
+- rf-check (100 MHz to 5.8 GHz, both directions, both tuning modes): the
+  tone is found at every point; C is within 1.0 dB of A in level at every
+  point and the same in frequency error, image and LO leakage, noise floor.
+- Transmit in every sample format at full rate (`fmt_txrf`): 15 of 15 cases
+  pass on both images.
+- Overclocked (122.88 Msps): the pulse cases fail on both images, as on
+  channel 2 (section 7); the transmitted ones now on a few PRIs out of
+  thousands (6 to 11 per case on either image), with the carrier right.
+- The first run (`ch1`) had two single failures on C, both explained:
+  - TX at 433 MHz, host tuning mode: the tone 26 dB low and 1.4 kHz off.
+    This was the start-up of the transmission (below); with the corrected
+    measurement the point read normally 8 times out of 8 on C and on A.
+  - `fmt_txrf_sc16meta_x2-host` (two channels at 30.72 Msps): 1,458
+    "dropouts". Repeated 6 times per image with the old check: C passed 6
+    of 6, A 5 of 6 (351 dropouts once), and with the corrected check both
+    pass: the dropout check had counted the gaps of the start-up bursts.
+
+**Channel 1 against channel 2, the same with A and C (so the board, not the
+FPGA)**, host tuning mode, `ch1b` against `tx`:
+
+| | Channel 1 | Channel 2 |
+|---|---|---|
+| TX tone at 100 MHz | −45.3 / −45.4 dBFS (A / C) | −31.9 / −32.0 dBFS |
+| B200mini noise floor while TX transmits at 100 MHz | −99.1 / −98.7 dBFS | −115.4 / −115.3 dBFS |
+| RX tone at 5.8 GHz | −55.0 / −55.1 dBFS | −51.7 / −51.7 dBFS |
+| RX image rejection at 100 MHz | −56 dBc | −42 dBc |
+
+Elsewhere the two channels are within 1.6 dB of each other. A finer sweep of
+channel 1 (host mode, 2 Msps, `bin/rf-lowband.py` with rf-check's checks; A and C
+within 0.2 dB of each other) shows a dip in TX1's output around 100-125 MHz,
+not a roll-off; RX1 is flat:
+
+| MHz | 70 | 85 | 100 | 125 | 150 | 200 | 250 | 300 | 433 |
+|---|---|---|---|---|---|---|---|---|---|
+| TX1 tone (dBFS) | −34.8 | −43.0 | −45.6 | −46.8 | −39.2 | −36.2 | −33.4 | −32.2 | −32.6 |
+| RX1 tone (dBFS) | −11.3 | −11.9 | −11.5 | −12.3 | −11.6 | −12.7 | −12.1 | −12.6 | −12.2 |
+
+Channel 2 was measured at 100 and 433 MHz only. A two-channel transmit
+check through a combiner (twoch-check.py) can compare TX1 and TX2 directly.
+
+**Start-up of a transmission (A and C alike).** In 24 receive-then-transmit
+sequences on channel 1 (`bin/tx-startup.py`: 433 MHz, host tuning mode, 12
+per image), the first
+one to three 50 ms B200mini captures after the tone appeared read it 10 to
+25 dB low in 7 runs on A and 2 on C. Inside such a capture there are bursts
+of 5 to 10 ms, about 13 dB below the tone and about 1.5 kHz below its
+frequency, with gaps between them, then the steady tone. The bursts come at
+the start of each bladeRF transmission, up to about 0.7 s long; the B200mini
+reported its receiver locked throughout, and all 666 captures after them
+read the tone normally, at the same frequency. The cause was not
+investigated. rf-check.py, pulse-check.py and twoch-check.py now measure a
+transmission 1 s after its signal first appears (`TX_SETTLE_S`, feeb443d);
+before, a measurement could land in the bursts.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -662,8 +730,9 @@ bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv 3cb48e29
   as Nuand's own builds of them (section 11).
 - Image C passes everything image A passes, in every campaign above
   (sections 3 to 7), in both tuning modes, with Nuand's libbladeRF and with
-  the fixes; RF performance matches A (section 4); no time-out in 150-minute
-  receive and 90-minute transmit soaks (sections 3, 5).
+  the fixes; RF performance matches A on channel 2 (section 4) and on
+  channel 1 (section 13); no time-out in 150-minute receive and 90-minute
+  transmit soaks (sections 3, 5).
 - Image B: the restructured Qsys script still builds Nuand's Nios II design,
   with the same fit and timing as A, and passes the same tests.
 - Only one board (xA5) was tested on hardware; xA4 and xA9 were built only.
@@ -786,14 +855,15 @@ here.
    twice the speed its firmware asks for, and Nuand's Nios II/e `usleep()`
    runs about 40 % long (section 12); the wlan revision fails recovery timing
    and the adsb revision setup timing in Nuand's own builds (section 11).
-8. Channel 1 has not been checked at RF. Since the transmit cabling, RX2 and
-   TX2 face the B200mini and RX1 and TX1 are terminated, so every RF test
-   (rf-check, the transmit format cases, the pulses, foxhunt) used channel 2.
-   Channel 1 has had the digital checks: every sample of both channels through
-   the FPGA and USB (and with the BIST across the LVDS interface), and
-   test_ctrl's frequency, bandwidth and sample rate sweeps, which set only
-   channel 1 (its gain test sets both). No test has measured both channels'
-   RF at the same time.
+8. No test has measured both channels' RF at the same time. Each channel
+   has been checked at RF on its own (channel 2 in sections 4 to 12, channel
+   1 in section 13). twoch-check.py does both at once through a 2-way
+   splitter (README.md); it has not run on hardware yet.
+9. Seen on Nuand's image as on ours: TX1 is weaker around 100-125 MHz than
+   elsewhere (up to 14 dB) and than TX2 at 100 MHz (13 dB), and RX1 is
+   3.5 dB weaker than RX2 at 5.8 GHz (section 13; this board). The start of
+   every transmission brings up to ~0.7 s of short, weak, off-frequency
+   bursts (section 13; cause not investigated).
 
 ## How to repeat
 
