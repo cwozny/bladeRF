@@ -75,6 +75,14 @@ def tx_mode(d):
         return None
 
 
+def rf_channel(d):
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            return int(json.load(f).get("rf_ch", 2))    # older runs: channel 2
+    except (OSError, ValueError):
+        return None
+
+
 def compare(base, cand):
     flags = []
     (tb, sb), (tc, sc) = tests(base), tests(cand)
@@ -84,6 +92,11 @@ def compare(base, cand):
         print("WARNING: TX mode differs (baseline tx=%s, candidate tx=%s)"
               % (tx_mode(base), tx_mode(cand)))
         flags.append(("meta", "TX-MODE-DIFFERS"))
+    if rf_channel(base) != rf_channel(cand):
+        # The RF measurements then come from different ports and paths
+        print("WARNING: RF channel differs (baseline rf_ch=%s, candidate rf_ch=%s)"
+              % (rf_channel(base), rf_channel(cand)))
+        flags.append(("meta", "RF-CHANNEL-DIFFERS"))
     print("%-34s %10s %10s" % ("test", "baseline", "candidate"))
     for name in sorted(set(tb) | set(tc)):
         b, c = tb.get(name), tc.get(name)
