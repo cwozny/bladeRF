@@ -342,6 +342,15 @@ def oc_tx_case(u, pw, pri, rate=OC_RATE, fmt="sc8"):
                 except RuntimeError as e:
                     last = e
                     time.sleep(0.5)
+            if m is not None and t.is_alive():
+                # past the start-up bursts of a transmission (rf-check.TX_SETTLE_S)
+                time.sleep(rf.TX_SETTLE_S)
+                x = rf.b200_capture(u, int(B200_FS * CAPTURE_S), FC, B200_FS, rf.B200_RX_GAIN)
+                save_capture(x, B200_FS, "octx-%s-%gMsps-pw%gus-pri%gus" % (fmt, rate / 1e6, pw * 1e6, pri * 1e6))
+                try:
+                    m = measure_pulses(x, B200_FS, 0.2e-6)
+                except RuntimeError as e:
+                    m, last = None, e
         finally:
             t.join()
     if "error" in result:
@@ -379,6 +388,15 @@ def tx_fmt(u, fmt, layout, rate):
             except RuntimeError as e:
                 last = e
                 time.sleep(0.5)
+        if m is not None and t.is_alive():
+            # A transmission starts with short bursts, low and off-frequency
+            # (rf-check.TX_SETTLE_S), which the dropout check would count:
+            # judge a capture that much later, well inside the 9 s transmission
+            time.sleep(rf.TX_SETTLE_S)
+            x = rf.b200_capture(u, int(B200_FS * 0.5), FC, B200_FS, rf.B200_RX_GAIN)
+            a = rf.analyze(x, B200_FS, F_OFF)
+            a.update(fc=FC, first_tone_dbfs=m["tone_dbfs"])
+            m = a
         if m is not None:
             # dropouts: the envelope, averaged over 1 us, must never fall more
             # than 6 dB below its median (an underrun sends zeros for at least

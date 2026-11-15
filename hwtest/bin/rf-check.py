@@ -65,6 +65,11 @@ B200_TX_GAIN = 50       # dB of 89.75 (~+10 dBm at full gain): about -30 dBm
 B200_TX_GAIN_MAX = 65   # never more: <= ~-15 dBm out, -35 dBm after 20 dB
 B200_RX_GAIN = 30       # dB
 TRIES = 3               # captures per point before giving up on dropped samples
+# A bladeRF transmission starts with up to ~0.7 s of short bursts of the tone,
+# 10-25 dB low and ~1.5 kHz below its frequency, with gaps between them (seen
+# on images A and C alike, channel 1, 2026-11-15, results/tx433-1115-0849):
+# the tone is measured this long after it is first found
+TX_SETTLE_S = 1.0
 
 
 def run_cli(cmds, timeout=60):
@@ -260,11 +265,12 @@ def check_tx(u, point):
                         m = None
                         time.sleep(0.5)
             if m is not None and t.is_alive():
-                # The first capture with the tone can straddle the start of
-                # the transmission (and the LO settling) and read low and
-                # off-frequency: measure the next one, which lies wholly
-                # inside the transmission (the file plays for 10 s)
+                # The first capture with the tone can fall into the start-up
+                # bursts (TX_SETTLE_S) and read low and off-frequency: measure
+                # a capture TX_SETTLE_S later, well inside the transmission
+                # (the file plays for 10 s)
                 first = m
+                time.sleep(TX_SETTLE_S)
                 rx = b200_capture(u, int(fs * 0.05), fc, fs, B200_RX_GAIN)
                 m = analyze(rx, fs, f_off)
                 m.update(direction="bladerf_tx", fc=fc, fs=fs, f_off=f_off,

@@ -873,7 +873,7 @@ def tx_run(u, meta, path, chans, g1, g2):
             else:
                 time.sleep(0.5)
         if found is not None:
-            time.sleep(0.2)
+            time.sleep(rf.TX_SETTLE_S)      # past the start-up bursts (see rf-check)
             y = rf.b200_capture(u, n, fc - meta["delta"], meta["fs_b200"], rf.B200_RX_GAIN)
             ended = not t.is_alive()
     finally:
