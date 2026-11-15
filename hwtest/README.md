@@ -23,8 +23,9 @@ results.
   receive-only and antennas may stay attached: a preloaded guard
   (`lib/no-tx-guard.c`) makes libbladeRF refuse to enable any TX channel for
   every program the harness runs, `bladerf-cli-safe` refuses `tx`/`trigger`,
-  `rf-check.py` refuses to run, and `run-suite.sh` leaves out every test
-  that enables TX. Bias-tees stay off either way.
+  `rf-check.py`, `pulse-check.py` and `twoch-check.py` refuse to run, and
+  `run-suite.sh` leaves out every test that enables TX. Bias-tees stay off
+  either way.
 
 ## One-time setup (XPS 13)
 
@@ -39,10 +40,10 @@ With antennas on the bladeRF, or anything else that is not the cabling below,
 leave `HWTEST_TX` unset. `run-suite.sh` then runs the smoke, host, fpga and
 soak phases without their TX tests (TX streaming, TX timestamps, TX quick
 retune, digital loopbacks, test_ctrl's `enable_module` and `threads` cases)
-and skips the rf phase. Retunes are covered by RX retunes scheduled on
-timestamps with quick-tune profiles (`test_scheduled_retune`, 24 frequencies
-from `lib/hops-rx.txt`), which also runs in TX mode. Compare receive-only runs
-only with receive-only runs (`tx` in meta.json).
+and skips the rf and twoch phases. Retunes are covered by RX retunes
+scheduled on timestamps with quick-tune profiles (`test_scheduled_retune`, 24
+frequencies from `lib/hops-rx.txt`), which also runs in TX mode. Compare
+receive-only runs only with receive-only runs (`tx` in meta.json).
 
 ## Phases and test notes
 
@@ -59,8 +60,10 @@ Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
 branch `host-fixes`: also run the tests below that fail with every image
 without them; `HWTEST_FPGA_MIMO=1` is its older name), `HWTEST_RF_CH=1|2`
 (the bladeRF channel cabled to the B200mini, default 2; for a whole campaign,
-see "Cabling for TX runs"), `SOAK_MINUTES`,
-`FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and `BIST_MIN`.
+see "Cabling for TX runs"), `HWTEST_2CH=rx|tx|both` (the two-channel setup
+that is cabled, for the twoch phase; also for a whole campaign, same
+section), `SOAK_MINUTES`, `FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and
+`BIST_MIN`.
 
 Things that fail with every image, including the official one, so the
 harness does not run them that way:
@@ -274,6 +277,75 @@ These phases use `lib/hwtest-stream.c` (built by build-host.sh) and
   and the trigger reports fired. The counter modes bypass the trigger gate,
   so it receives baseband samples.
 
+### Both channels at RF (twoch, `bin/twoch-check.py`)
+
+The other RF tests use one channel. The twoch phase checks RX1 and RX2, and
+TX1 and TX2, at the same time, through a 2-way splitter (the setups are
+under "Cabling for TX runs"), at five of rf-check.py's points (433 MHz to
+5.8 GHz, 4 to 20 Msps), in both tuning modes. `HWTEST_2CH` picks the
+subcommands, `rx`, `tx` or `both`; unset, the phase is skipped (logged). It
+transmits, so it also needs `HWTEST_TX=1`. Results go to `twoch.jsonl`, one
+record per point and subcommand with every measurement, `pass`, and the
+reasons in `fails`.
+
+* **rx**: the B200mini sends a tone (rf-check.py's offset) while one
+  bladeRF-cli run receives on RX1 and RX2 together (`rx config ...
+  channel=1,2`, which interleaves the channels sample by sample, RX1 first),
+  then with RX2's gain 10 dB lower, then on each channel alone, then four
+  times after tuning away (by 20 MHz, or an octave) and back. Then the
+  B200mini sends a periodic chirp (±0.4 fs) and a second run receives it on
+  both channels. The first 0.1 s of every capture is not analyzed (libbladeRF
+  tunes the LO again when the stream starts, and its first buffers can come
+  out of order). It fails if a channel has no tone (within 10 ppm, 30 dB
+  above the floor); the channels differ by more than 4 dB at equal gains, or
+  their tones by more than one FFT bin; the phase difference between them
+  spreads by more than 5° over the blocks of any capture (a lost or extra
+  sample on one channel moves it by 27-45° at these offsets); lowering RX2's
+  gain by 10 dB moves RX2 by other than -10 ± 2.5 dB or RX1 by more than
+  2 dB (which also shows which stream slot is which channel); a channel alone
+  is more than 7 dB from its level in the two-channel capture; or the chirp's
+  cross-correlation peak is not at lag 0 (or not 10 dB clear of the other
+  lags), or the fractional lag, from the slope of the cross-spectrum's phase,
+  is over a quarter sample. Reported, not judged: the levels, images and DC,
+  the phase difference, how it moved with the gain step and after each retune
+  (classed stable, flips by 180°, or varies: the channels share the AD9361's
+  RX synthesizer, but nothing at hand says the AD9361 keeps their phase
+  difference across retunes).
+* **tx**: bladeRF-cli sends a two-channel file (`tx config ... channel=1,2`,
+  interleaved the same way) with a tone fs/16 above the carrier on TX1 and
+  3fs/32 on TX2; then the same with TX2's gain 10 dB lower; then TX1 alone and
+  TX2 alone, each with its own tone. The B200mini listens 5fs/32 below the
+  carrier, so that every tone, image and LO leak of either channel, and the
+  B200mini's own images and DC, has a frequency of its own, and the bladeRF's
+  LO leakage does not land on the B200mini's DC (whose correction would
+  remove it). It fails if a tone is missing or off frequency; the two tones
+  differ by more than 4 dB at equal gains; lowering TX2's gain moves TX2's
+  tone by other than -10 ± 2.5 dB or TX1's by more than 2 dB; or a channel
+  alone is more than 7 dB from its two-channel level, or the other
+  channel's tone is less than 30 dB below it. Reported: each channel's image
+  and LO leakage, alone and together.
+* The splitter can be resistive or a Wilkinson: every check compares the
+  channels with each other, or a channel with itself, never absolute levels.
+  The 7 dB between one and two channels is for a resistive splitter: with one
+  channel enabled the other port's RF switch is off and reflects, which moves
+  the active port by -6 to +3.5 dB through a resistive splitter (not through
+  a Wilkinson). A channel that does not work alone, or streams the other
+  channel's samples, is 20 dB or more off.
+* In FPGA tuning mode the rx subcommand runs only with `HWTEST_FIXES=1`:
+  Nuand's libbladeRF cannot receive on both channels there (`test_rx_meta
+  -m` above). The tx subcommand runs in both tuning modes.
+* bladeRF-cli exits 0 even when one of its commands fails, so twoch-check.py
+  also fails on its `Error:` lines and checks the size of every capture.
+* `--save DIR` keeps the raw captures with a manifest per point, and
+  `--analyze DIR` analyzes them again (transmitting nothing). `--self-test`
+  checks the analysis on synthetic signals (deinterleaving, phase, whole and
+  fractional lags, gain steps, missing tones, the TX frequency plan, noise,
+  `--save`/`--analyze`) and that every bladeRF-cli command it sends passes
+  `bladerf-cli-safe` (with a stand-in for bladeRF-cli).
+* Not run on hardware yet (written before the splitter arrived): the
+  thresholds are estimates from the hardware's properties, to be revisited
+  after the first runs.
+
 ### foxhunt (`bin/foxhunt-check.py`, run by hand)
 
 The micro's foxhunt revision is a standalone transmitter: once loaded, its
@@ -316,8 +388,49 @@ or below -15 dBm (Ettus's limit for the B200mini's RF inputs), so both
 transmitters are capped: with `HWTEST_TX=1` every harness program has
 `lib/tx-cap.c` preloaded, which keeps the bladeRF's overall TX gain at or
 below 60 dB (about 0 dBm, so -20 dBm at the B200mini), and `rf-check.py`
-never sets the B200mini's TX gain above 65 dB (about -15 dBm out). Without
-the caps it would take 30 dB per link.
+(whose B200mini helpers the other checks use) never sets the B200mini's TX
+gain above 65 dB (about -15 dBm out). Without the caps it would take 30 dB
+per link.
+
+### Two-channel setups (`HWTEST_2CH`, phase twoch)
+
+The twoch phase needs a 2-way splitter (resistive, about 6 dB per path, or a
+Wilkinson, about 3 dB) in one of two setups:
+
+    RX setup (HWTEST_2CH=rx):
+    B200mini TX/RX -> 20 dB -> splitter -> bladeRF RX1 and RX2   USRP tone and chirp on both RX channels
+    bladeRF TXn    -> 20 dB -> B200mini RX2                      n = HWTEST_RF_CH (or a load); other TX port: load
+
+    TX setup (HWTEST_2CH=tx):
+    bladeRF TX1 and TX2 -> splitter as combiner -> 20 dB -> B200mini RX2
+    B200mini TX/RX -> 20 dB -> bladeRF RXn                       n = HWTEST_RF_CH; other RX port: load
+
+With one splitter, cable one setup at a time and swap cables between
+campaigns; with two, cable both at once (`HWTEST_2CH=both`; `HWTEST_RF_CH`
+may then be either channel). Like `HWTEST_TX` and `HWTEST_RF_CH`,
+`HWTEST_2CH` describes the cabling: set it in the campaign's environment
+(campaign.sh refuses it on a plan line); run-suite.sh records it in meta.json
+(`twoch`). A wrong setting is safe (every transmitter still goes through
+20 dB into a receiver or a load); the twoch checks then fail.
+
+The other phases still run in these setups, with differences:
+
+* RX setup: both RX ports get the B200mini's signal, 3-6 dB weaker than with
+  the standard cabling (rf-check.py's rx direction, the oc pulses);
+  `HWTEST_RF_CH` names the TX port that is cabled to the B200mini.
+* TX setup: `HWTEST_RF_CH` names the RX port that is cabled to the B200mini,
+  and the B200mini receives the bladeRF through the combiner, 3-6 dB weaker.
+  The formats phase's two-channel transmit cases (`fmt_txrf_*_x2`) send the
+  same tone on both TX ports, which now both reach the B200mini and add with
+  the channels' phase difference, anywhere from +6 dB to cancellation: leave
+  them out (`HWTEST_SKIP`) or run the formats phase with the standard
+  cabling. foxhunt (TX2) works through the combiner.
+
+Power: a splitter only adds loss for a single transmitter. In the TX setup
+both bladeRF TX channels reach the B200mini: even at the cap (0 dBm each),
+two equal signals adding in phase in a Wilkinson make about +3 dBm, so
+-17 dBm at the B200mini, still below its -15 dBm (twoch-check.py's 30 dB TX
+gain makes about -50 dBm there).
 
 ## Scripts
 
@@ -331,6 +444,7 @@ the caps it would take 30 dB per link.
 | `bin/bladerf-reset.py` | FX3 reboot (`bladerf_device_reset`) or USB port reset, without talking to the FPGA |
 | `bin/rf-check.py` | CW tone checks against the B200mini across bands and sample rates |
 | `bin/pulse-check.py` | Overclocked pulse trains both ways, and full-rate TX in every sample format, against the B200mini |
+| `bin/twoch-check.py` | Both RX channels, or both TX channels, at once through a splitter against the B200mini: levels, phase, sample alignment, gain independence, single vs two channels |
 | `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
