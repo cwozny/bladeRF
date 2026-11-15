@@ -4,7 +4,7 @@
 # libbladeRF from $HOST_BUILD (default: the main build, Nuand's libbladeRF), NO harness preload (no
 # TX cap, no no-TX guard) and no harness time limit; only a watchdog against a real hang
 # (WATCHDOG seconds, default 2700). FAST=1 (default) adds -f, the fast variant; FAST=0 runs the
-# full test as the checklist does. IMAGES (default "C A"). TRACE=1 preloads lib/nios-trace.c
+# full test as the checklist does. IMAGES (default "C A"; A, B or C). TRACE=1 preloads lib/nios-trace.c
 # (observation only: it logs every Nios packet with its timing and changes nothing) and analyzes
 # the trace with nios-trace-threads.py; use it with the fast variant (the shim writes its log at
 # exit, so a run the watchdog stops leaves none).
@@ -38,7 +38,14 @@ if [ "${TRACE:-0}" = 1 ]; then
         -o "$SO" "$H/lib/nios-trace.c" -ldl || { echo "cannot build the trace shim"; exit 2; }
 fi
 echo "libbladeRF_test_ctrl $args; host build $HOST_BUILD ($(ldd $T/libbladeRF_test_ctrl | grep -o '/[^ ]*libbladeRF.so[^ ]*' | head -1)); LD_PRELOAD='${LD_PRELOAD:-}'${SO:+; traced}; out $OUT"
-img() { [ "$1" = A ] && echo $IMG/A-official-v0.16.0.rbf || echo $IMG/C-niosv-q25.1.rbf; }
+img() {
+    case "$1" in
+        A) echo $IMG/A-official-v0.16.0.rbf ;;
+        B) echo $IMG/B-nios2-q23.1.1.rbf ;;
+        C) echo $IMG/C-niosv-q25.1.rbf ;;
+        *) echo "unknown image $1" >&2; exit 2 ;;
+    esac
+}
 on_usb() { lsusb -d 2cf0:5250 > /dev/null 2>&1; }
 for i in ${IMAGES:-C A}; do
     on_usb || { echo "[$(date +%T)] bladeRF is not on USB before $i: stopping"; exit 3; }
