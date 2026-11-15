@@ -842,10 +842,30 @@ here.
    DIGITAL_LOOPBACK (libbladeRF's open does not reset it), and
    `test_digital_loopback -l rfic` fails its first run after an image load or
    after another program transmitted. Same with Nuand's libbladeRF.
-4. `test_ctrl -T fpga -t threads` failed twice with image A and Nuand's
-   libbladeRF, and the second time the bladeRF dropped off USB until it was
-   replugged. It has been left out of unattended runs; it needs a rerun with
-   someone at the bench.
+4. `test_ctrl -T fpga -t threads` (Nuand's test: RX and TX stream through
+   the FX3 firmware loopback while threads run 75 gain sweeps, 25 bandwidth
+   sweeps, a frequency sweep and the correction test) fails on every image.
+   Image A failed twice on 2026-11-13 (the second time the bladeRF dropped
+   off USB until it was replugged). On 2026-11-15, with someone at the bench,
+   A and C failed twice each with Nuand's libbladeRF and twice each with the
+   host-fixes libbladeRF (`results/ctrlthreads-1115-0933/`,
+   `ctrlthreads-fixes-1115-0955/`; the board stayed on USB). In every run
+   commands to the Nios time out within seconds (`_rfic_cmd_write ...
+   Operation timed out`: no reply within libbladeRF's 250 ms), gain
+   readbacks are wrong thousands of times, and a sample stream fails too (A
+   with Nuand's libbladeRF; A and C with the fixes). Two parts of this
+   result come from the harness:
+   - the TX cap clamps the gain thread's TX gains above 60 dB while TX
+     streams, so those readbacks cannot match (most wrong readbacks read 60);
+   - the run is stopped after 5 minutes, but the test needs about 12: its
+     sweeps queue on the Nios (one gain sweep takes ~4.5 s alone, one
+     bandwidth sweep ~14 s).
+
+   The command time-outs are not the harness's. They look like libbladeRF's
+   RFIC command handling under concurrent use: `_rfic_fpga_spinwait` polls
+   the Nios's work queue 30 times, 100 µs apart, while one bandwidth change
+   keeps the Nios busy for up to ~290 ms. Not investigated further; left out
+   of unattended runs.
 5. Nuand's foxhunt firmware as it is (TX1, TX bias tee on) has not been run:
    the bench terminates TX1 and has no DC block. The bench images differ
    from it in those two lines only (section 12).

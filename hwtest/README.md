@@ -102,11 +102,12 @@ harness does not run them that way:
   `HWTEST_FIXES=1` and `HWTEST_TX=1`).
 * test_ctrl's `threads` case in host tuning mode: test_ctrl refuses it on
   the bladeRF 2.0 (Nuand issue #705). The harness runs it in FPGA tuning
-  mode only, but there it failed both times with the official image
-  ("Erroneous overall gain readback", then RX/TX transfer time-outs until it
-  was killed), and the second time the bladeRF dropped off USB 25 s in and
-  only came back when it was unplugged and plugged in again. Unattended
-  campaigns leave it out (`HWTEST_SKIP=ctrl_threads-fpga`).
+  mode only, and there it fails with every image and either libbladeRF
+  build: commands to the Nios time out, and the TX cap and the 300 s limit
+  also get in its way (TESTING.md, open item 4). Once, with the official
+  image, the bladeRF dropped off USB 25 s in and only came back when it was
+  unplugged and plugged in again, so unattended campaigns leave it out
+  (`HWTEST_SKIP=ctrl_threads-fpga`).
 
 `test_rx_meta`'s two-channel variants overrun now and then, in either tuning
 mode and with either libbladeRF build (9 of 180 runs, one in 20): it streams
