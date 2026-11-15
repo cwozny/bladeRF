@@ -16,6 +16,11 @@
 #          Nios: ~1 hour with the official image
 #   rf     rf-check.py against the B200mini, in both tuning modes
 #          (transmits: only with HWTEST_TX=1)
+#   twoch  twoch-check.py against the B200mini through a 2-way splitter:
+#          RX1 and RX2 at once (HWTEST_2CH=rx), TX1 and TX2 at once
+#          (HWTEST_2CH=tx), or both, in both tuning modes (transmits: only
+#          with HWTEST_TX=1; skipped without HWTEST_2CH; two-channel receive
+#          in FPGA tuning mode only with HWTEST_FIXES=1)
 #   soak   repeats a short mixed workload for SOAK_MINUTES (default 90,
 #          i.e. longer than any IP evaluation time-out)
 #   formats  every sample format (SC16, SC16 meta, SC8, SC8 meta, packed),
@@ -41,9 +46,9 @@
 # terminated, no antennas, TX gain capped; see README.md), the suite is
 # receive-only and antennas may be attached: tests that enable a TX channel
 # are left out (the no-TX guard would refuse them anyway), test_ctrl runs
-# case by case without its enable_module and threads cases, and the rf phase
-# is skipped. Retunes are then exercised with RX retunes scheduled on
-# timestamps (test_scheduled_retune), which also runs in TX mode.
+# case by case without its enable_module and threads cases, and the rf and
+# twoch phases are skipped. Retunes are then exercised with RX retunes
+# scheduled on timestamps (test_scheduled_retune), which also runs in TX mode.
 #
 # Environment: HOST_BUILD selects the libbladeRF build under test (default
 # $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
@@ -54,13 +59,16 @@
 # two-channel receive. HWTEST_FPGA_MIMO=1 is its older name. HWTEST_RF_CH=1
 # says channel 1 (RX1, TX1) faces the B200mini instead of channel 2 (the
 # default), with channel 2's ports terminated: the RF phases then test
-# channel 1 (README.md, "Cabling for TX runs").
+# channel 1 (README.md, "Cabling for TX runs"). HWTEST_2CH=rx|tx|both says
+# which two-channel setup is cabled (the same section): the twoch phase runs
+# twoch-check.py rx, tx or both; unset, it skips the phase.
 #
 # Results: $RESULTS_DIR/<label>/<time>/ with one log per test, summary.jsonl
-# ({"test", "rc", "seconds"}), rf.jsonl and meta.json. Compare runs with
-# compare.py. Only test programs on the allowlist below are ever run; the two
-# flash/bootloader tests (test_flash_validate, test_bootloader_recovery) are
-# deliberately absent. Afterwards the official image is reloaded.
+# ({"test", "rc", "seconds"}), rf.jsonl, twoch.jsonl and meta.json. Compare
+# runs with compare.py. Only test programs on the allowlist below are ever
+# run; the two flash/bootloader tests (test_flash_validate,
+# test_bootloader_recovery) are deliberately absent. Afterwards the official
+# image is reloaded.
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 
@@ -84,10 +92,13 @@ fixes_ok() { [ "$FIXES" = 1 ]; }
 RF_CH=${HWTEST_RF_CH:-2}
 case "$RF_CH" in 1|2) ;; *) die "HWTEST_RF_CH must be 1 or 2, not $RF_CH" ;; esac
 export HWTEST_RF_CH=$RF_CH
+TWOCH=${HWTEST_2CH:-}
+case "$TWOCH" in ""|rx|tx|both) ;; *) die "HWTEST_2CH must be rx, tx or both (or unset), not $TWOCH" ;; esac
 if tx_ok; then
     require_tx_cap
     log "TX allowed (HWTEST_TX=1, bladeRF TX gain capped at 60 dB): every bladeRF TX port must be cabled through >= 20 dB or terminated, no antennas"
     log "RF tests use channel $RF_CH (HWTEST_RF_CH): RX$RF_CH and TX$RF_CH face the B200mini, the other channel's ports are terminated"
+    [ -z "$TWOCH" ] || log "two-channel setup cabled: $TWOCH (HWTEST_2CH; README.md, \"Cabling for TX runs\")"
 else
     require_no_tx_guard
     log "receive-only (HWTEST_TX is not 1): no TX channel is enabled; TX tests are left out"
@@ -95,7 +106,7 @@ fi
 
 cat > "$out/meta.json" <<EOF
 {"label": "$label", "image": "$image", "image_md5": "$(md5_of "$image")",
- "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false), "rf_ch": $RF_CH,
+ "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false), "rf_ch": $RF_CH, "twoch": "$TWOCH",
  "start": "$(date -Is)", "host": "$(hostname)",
  "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)",
  "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fixes": "$FIXES"}
@@ -337,6 +348,34 @@ for phase in "${phases[@]}"; do
                 python3 "$HWTEST_DIR/bin/rf-check.py" all --out "$out/rf-$m.jsonl"
         done
         cat "$out"/rf-*.jsonl > "$out/rf.jsonl" 2>/dev/null
+        ;;
+    twoch)
+        # Both RX channels, or both TX channels, at once through a 2-way
+        # splitter (twoch-check.py; README.md, "Cabling for TX runs"):
+        # HWTEST_2CH says which setup is cabled. Two-channel receive in FPGA
+        # tuning mode only with HWTEST_FIXES=1, as in the formats phase:
+        # Nuand's libbladeRF cannot receive on both channels there.
+        if ! tx_ok; then
+            log "twoch phase skipped: it transmits (needs HWTEST_TX=1 and the cabling in README.md)"
+            continue
+        fi
+        if [ -z "$TWOCH" ]; then
+            log "twoch phase skipped: HWTEST_2CH is not set (rx, tx or both: the two-channel setup that is cabled, see README.md)"
+            continue
+        fi
+        load_image twoch
+        for m in host fpga; do
+            for d in rx tx; do
+                [ "$TWOCH" = both ] || [ "$TWOCH" = "$d" ] || continue
+                if [ "$d" = rx ] && [ "$m" = fpga ] && ! fixes_ok; then
+                    log "--- twoch_rx-fpga: left out (two-channel receive in FPGA tuning mode needs HWTEST_FIXES=1)"
+                    continue
+                fi
+                BLADERF_DEFAULT_TUNING_MODE=$m runtest "twoch_$d-$m" 1800 - \
+                    python3 "$HWTEST_DIR/bin/twoch-check.py" "$d" --out "$out/twoch-$m.jsonl"
+            done
+        done
+        cat "$out"/twoch-*.jsonl > "$out/twoch.jsonl" 2>/dev/null
         ;;
     formats)
         # Full rate: the highest rate at which a format fits the USB 3 load
