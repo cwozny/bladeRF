@@ -2,19 +2,20 @@
 """Overclock and TX sample-format checks of the bladeRF against the B200mini.
 
   pulse-check.py oc-rx  [--oc-rate RATE] [--out results.jsonl]
-      B200mini TX pulses -> bladeRF RX2, overclocked: 122.88 Msps (or RATE),
+      B200mini TX pulses -> bladeRF RXn, overclocked: 122.88 Msps (or RATE),
       8-bit
   pulse-check.py oc-tx  [--oc-rate RATE] [--oc-format sc8|sc8meta] [--out ...]
-      bladeRF TX2 pulses, overclocked: 122.88 Msps (or RATE), 8-bit (sc8meta:
+      bladeRF TXn pulses, overclocked: 122.88 Msps (or RATE), 8-bit (sc8meta:
       with metadata, one burst started "now") -> B200mini RX
   pulse-check.py tx-fmt --format FMT --layout x1|x2 --rate RATE [--out ...]
-      bladeRF transmits a tone in sample format FMT at RATE (on TX2, and on
-      TX1 into its load for x2) -> B200mini RX: the tone must be there,
-      at the right frequency, without dropouts
+      bladeRF transmits a tone in sample format FMT at RATE (on TXn, and for
+      x2 also on the other channel, into its load) -> B200mini RX: the tone
+      must be there, at the right frequency, without dropouts
 
 Cabling and power limits as for rf-check.py (whose B200mini helpers this
-uses): bladeRF TX2 -> 20 dB -> B200mini RX2, B200mini TX/RX -> 20 dB ->
-bladeRF RX2, bladeRF TX gain capped by lib/tx-cap.c, B200mini TX gain by
+uses), n = HWTEST_RF_CH (default 2): bladeRF TXn -> 20 dB -> B200mini RX2,
+B200mini TX/RX -> 20 dB -> bladeRF RXn, the other channel's ports
+terminated, bladeRF TX gain capped by lib/tx-cap.c, B200mini TX gain by
 rf-check.B200_TX_GAIN_MAX. Transmits: only with HWTEST_TX=1.
 
 Pulse cases: the transmitter sends a carrier at F_OFF from the tuned
@@ -60,7 +61,7 @@ F_OFF = 3e6             # tone offset from the carrier
 OC_RATE = 122.88e6      # overclocked bladeRF sample rate (default; --oc-rate)
 B200_FS = 20e6          # B200mini sample rate for the pulse cases
 CAPTURE_S = 0.25        # capture length
-BLADERF_CH = 2          # RX2/TX2 face the B200mini
+BLADERF_CH = rf.BLADERF_CH  # the channel facing the B200mini (HWTEST_RF_CH)
 OC_RX_GAIN = 10         # dB (manual)
 OC_B200_TX_GAIN = 60    # dB (cap 65): strong pulses for 8-bit samples
 TX_GAIN = 30            # dB overall (capped at 60 by lib/tx-cap.c)
@@ -418,6 +419,7 @@ def main():
     if os.environ.get("HWTEST_TX") != "1":
         sys.exit("pulse-check.py transmits: set HWTEST_TX=1 only with the cabling "
                  "in rf-check.py (attenuators, no antennas)")
+    rf.check_channel()
     u = rf.usrp()
     out = sys.stdout if a.out == "-" else open(a.out, "a")
     if a.mode == "oc-rx":
@@ -442,6 +444,7 @@ def main():
         if errors:
             m["retry_errors"] = errors
         m["time"] = time.time()
+        m["bladerf_ch"] = BLADERF_CH
         if not m.get("pass"):
             fails += 1
         out.write(json.dumps(m, default=float) + "\n")

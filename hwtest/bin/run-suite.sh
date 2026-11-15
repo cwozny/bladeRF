@@ -51,7 +51,10 @@
 # libbladeRF fixes of branch host-fixes and also runs what fails with every
 # image without them (see README.md): two-channel receive in FPGA tuning mode,
 # test_fpga_load in host tuning mode and, with HWTEST_TX=1, TX on/off during a
-# two-channel receive. HWTEST_FPGA_MIMO=1 is its older name.
+# two-channel receive. HWTEST_FPGA_MIMO=1 is its older name. HWTEST_RF_CH=1
+# says channel 1 (RX1, TX1) faces the B200mini instead of channel 2 (the
+# default), with channel 2's ports terminated: the RF phases then test
+# channel 1 (README.md, "Cabling for TX runs").
 #
 # Results: $RESULTS_DIR/<label>/<time>/ with one log per test, summary.jsonl
 # ({"test", "rc", "seconds"}), rf.jsonl and meta.json. Compare runs with
@@ -78,9 +81,13 @@ exec > >(tee -a "$out/run.log") 2>&1
 tx_ok() { [ "$HWTEST_TX" = 1 ]; }
 FIXES=${HWTEST_FIXES:-${HWTEST_FPGA_MIMO:-0}}
 fixes_ok() { [ "$FIXES" = 1 ]; }
+RF_CH=${HWTEST_RF_CH:-2}
+case "$RF_CH" in 1|2) ;; *) die "HWTEST_RF_CH must be 1 or 2, not $RF_CH" ;; esac
+export HWTEST_RF_CH=$RF_CH
 if tx_ok; then
     require_tx_cap
     log "TX allowed (HWTEST_TX=1, bladeRF TX gain capped at 60 dB): every bladeRF TX port must be cabled through >= 20 dB or terminated, no antennas"
+    log "RF tests use channel $RF_CH (HWTEST_RF_CH): RX$RF_CH and TX$RF_CH face the B200mini, the other channel's ports are terminated"
 else
     require_no_tx_guard
     log "receive-only (HWTEST_TX is not 1): no TX channel is enabled; TX tests are left out"
@@ -88,7 +95,7 @@ fi
 
 cat > "$out/meta.json" <<EOF
 {"label": "$label", "image": "$image", "image_md5": "$(md5_of "$image")",
- "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false),
+ "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false), "rf_ch": $RF_CH,
  "start": "$(date -Is)", "host": "$(hostname)",
  "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)",
  "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fixes": "$FIXES"}

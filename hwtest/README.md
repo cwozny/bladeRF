@@ -57,7 +57,9 @@ Settings, from the environment or per run in a campaign plan: `HOST_BUILD`
 (the libbladeRF build under test, default `host-build`), `HWTEST_SKIP=<test>,...`
 (left out, logged), `HWTEST_FIXES=1` (`HOST_BUILD` has the libbladeRF fixes on
 branch `host-fixes`: also run the tests below that fail with every image
-without them; `HWTEST_FPGA_MIMO=1` is its older name), `SOAK_MINUTES`,
+without them; `HWTEST_FPGA_MIMO=1` is its older name), `HWTEST_RF_CH=1|2`
+(the bladeRF channel cabled to the B200mini, default 2; for a whole campaign,
+see "Cabling for TX runs"), `SOAK_MINUTES`,
 `FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and `BIST_MIN`.
 
 Things that fail with every image, including the official one, so the
@@ -300,6 +302,13 @@ off USB ends the run and the campaign: only a replug brings it back.
     bladeRF TX1, RX1 -> 50 ohm loads            (nothing measures a TX1 -> RX1 loop yet)
     bladeRF TX2  -> 20 dB -> B200mini RX2       bladeRF TX measured by the USRP
     B200mini TX/RX -> 20 dB -> bladeRF RX2      USRP tone measured by the bladeRF
+
+To test channel 1 instead, swap the two channels' cables (TX1 -> 20 dB ->
+B200mini RX2, B200mini TX/RX -> 20 dB -> RX1, loads on TX2 and RX2) and set
+`HWTEST_RF_CH=1`: rf-check.py and pulse-check.py then use RX1 and TX1, and
+run-suite.sh records the channel in meta.json (`rf_ch`). foxhunt-check.py
+refuses it (the bench foxhunt images transmit on TX2). A run with the wrong
+setting for the cabling only transmits into a load, and its RF checks fail.
 
 At least 20 dB per link and no antennas anywhere. At full power (bladeRF 2.0
 micro +8 dBm, B200mini about +10 dBm) 20 dB would not keep every receiver at

@@ -5,9 +5,11 @@
   rf-check.py rx  [--out results.jsonl]   B200mini TX -> bladeRF RX
   rf-check.py all [--out results.jsonl]
 
-Expected cabling (fixed for the whole campaign, no antennas; see README.md):
-  bladeRF TX2 -> >= 20 dB -> B200mini "RX2" port (UHD's default RX antenna)
-  B200mini "TX/RX" port -> >= 20 dB -> bladeRF RX2
+Expected cabling (fixed for the whole campaign, no antennas; see README.md),
+with n = HWTEST_RF_CH (1 or 2, default 2) and the other channel's ports
+terminated:
+  bladeRF TXn -> >= 20 dB -> B200mini "RX2" port (UHD's default RX antenna)
+  B200mini "TX/RX" port -> >= 20 dB -> bladeRF RXn
 Transmit power is capped so that no receiver sees more than -20 dBm: the
 bladeRF by lib/tx-cap.c (preloaded with HWTEST_TX=1), the B200mini here
 (B200_TX_GAIN_MAX).
@@ -51,7 +53,12 @@ POINTS = [
     (5800e6, 10e6, 1e6),
 ]
 
-BLADERF_CH = 2          # bladeRF RX2/TX2 face the B200mini
+# The bladeRF channel whose RX and TX face the B200mini (HWTEST_RF_CH: 1 =
+# RX1/TX1, 2 = RX2/TX2, the default); the other channel's ports are terminated.
+try:
+    BLADERF_CH = int(os.environ.get("HWTEST_RF_CH") or 2)
+except ValueError:
+    BLADERF_CH = 0      # refused by check_channel()
 BLADERF_TX_GAIN = 30    # dB overall (60 ~= 0 dBm): about -30 dBm
 BLADERF_RX_GAIN = 15    # dB, manual gain: B200mini tone ~-15 to -25 dBFS
 B200_TX_GAIN = 50       # dB of 89.75 (~+10 dBm at full gain): about -30 dBm
@@ -301,6 +308,12 @@ def check_rx(u, point):
     return tone_found(m)
 
 
+def check_channel():
+    if BLADERF_CH not in (1, 2):
+        sys.exit("HWTEST_RF_CH must be 1 or 2 (the bladeRF channel cabled to the "
+                 "B200mini), not %r" % os.environ.get("HWTEST_RF_CH"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -313,6 +326,7 @@ def main():
         # Both directions transmit (the bladeRF or the B200mini)
         sys.exit("rf-check.py transmits: set HWTEST_TX=1 only with the cabling "
                  "above (attenuators, no antennas)")
+    check_channel()
     u = usrp()
     out = sys.stdout if a.out == "-" else open(a.out, "a")
     fails = 0
@@ -334,6 +348,7 @@ def main():
             if errors:
                 m["retry_errors"] = errors
             m["time"] = time.time()
+            m["bladerf_ch"] = BLADERF_CH
             out.write(json.dumps(m) + "\n")
             out.flush()
     return 1 if fails else 0

@@ -7,7 +7,8 @@
 # run-suite.sh's arguments plus settings for that run (SOAK_MINUTES,
 # FULLSOAK_RX_MIN, FULLSOAK_LOOP_MIN, BIST_MIN, SCHED_S, HOST_BUILD,
 # HWTEST_SKIP, HWTEST_FIXES; see run-suite.sh); blank lines and # comments
-# are ignored.
+# are ignored. HWTEST_TX and HWTEST_RF_CH describe the cabling, so they apply
+# to the whole campaign: set them in its environment, not per line.
 # After each run the board is brought back to the official image with
 # recover.sh; if that needs a human (replug, bootloader), the campaign
 # stops, since every later run would fail anyway. The campaign log goes to
@@ -23,7 +24,7 @@ check_good_images
 logf="$RESULTS_DIR/campaign-$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "$RESULTS_DIR"
 exec > >(tee -a "$logf") 2>&1
-log "campaign plan $1 (TX mode: ${HWTEST_TX})"
+log "campaign plan $1 (TX mode: ${HWTEST_TX}, RF channel: ${HWTEST_RF_CH:-2})"
 sed 's/^/    /' "$1"
 
 n=0

@@ -354,6 +354,10 @@ def main():
     if os.environ.get("HWTEST_TX") != "1":
         sys.exit("foxhunt-check.py: a foxhunt image transmits on its own: set "
                  "HWTEST_TX=1 only with the transmit cabling (see the help)")
+    if (os.environ.get("HWTEST_RF_CH") or "2") != "2":
+        sys.exit("foxhunt-check.py needs channel 2 cabled to the B200mini: the bench "
+                 "images transmit on TX2, and Nuand's unpatched image would put its "
+                 "TX bias tee's DC on TX1")
     u = rf.usrp()
     n = int(a.seconds * FS)
     cap = {}
