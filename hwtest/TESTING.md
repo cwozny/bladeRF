@@ -69,8 +69,9 @@ B shows that the restructured Qsys script still builds Nuand's Nios II design
 (same fit and timing as A); C is the Quartus 25.1 build the PR is for. The
 commits after C do not change these images: 99f1b2d5 adds a message to
 build_bladerf.sh, 54a2a77a moves the Nios V firmware build into
-`niosv_app.cmake` (the hosted RAM image stays byte-identical) and 3cb48e29
-adds the foxhunt firmware. For a Nios II build d984883b has the final
+`niosv_app.cmake` (the hosted RAM image stays byte-identical), 3cb48e29
+adds the foxhunt firmware and 3cf193b0 updates documentation and two script
+messages. For a Nios II build d984883b has the final
 branch's code: what changed after it is the Nios V build, build_bladerf.sh,
 documentation and an `#undef assert` that has no effect on a Nios II build.
 
