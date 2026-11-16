@@ -5,9 +5,10 @@
 # TX cap, no no-TX guard) and no harness time limit; only a watchdog against a real hang
 # (WATCHDOG seconds, default 2700). FAST=1 (default) adds -f, the fast variant; FAST=0 runs the
 # full test as the checklist does. IMAGES (default "C A"; A, B or C). TRACE=1 preloads lib/nios-trace.c
-# (observation only: it logs every Nios packet with its timing and changes nothing) and analyzes
-# the trace with nios-trace-threads.py; use it with the fast variant (the shim writes its log at
-# exit, so a run the watchdog stops leaves none).
+# (observation only: it logs every Nios packet, frequency and bandwidth call and failed sync call
+# with its timing, and how the sample transfers complete, and changes nothing) and analyzes the
+# trace with nios-trace-threads.py. The shim flushes its log every second, so a run the watchdog
+# stops loses about a second of it; a full run's trace takes about 2 GB.
 #
 # Without the TX cap the bladeRF may transmit at full power (+8 dBm), so this needs every bladeRF TX
 # port into a 50 ohm load or through at least 40 dB to any receiver (the B200mini's inputs take

@@ -11,11 +11,16 @@ Reports
 - for every RFIC command written (16x64, target RFIC, write): how long until
   a status read showed the Nios's work queue empty, per command;
 - every IN time-out with what the Nios had last been given to do, and the
-  packet sequence around the first few.
+  packet sequence around the first few;
+- the sample streams (traces with S/G/X/E/R lines): completions per second,
+  gaps over 100 ms, transfers that did not complete, failed submissions and
+  sync calls; failed bladerf_set/get_frequency calls (F lines); for each IN
+  time-out, when each stream endpoint last completed a transfer.
 """
 import collections
 import statistics
 import sys
+import time
 
 RFIC_CMDS = {0: "STATUS", 1: "INIT", 2: "ENABLE", 3: "SAMPLERATE",
              4: "FREQUENCY", 5: "BANDWIDTH", 6: "GAINMODE", 7: "GAIN",
@@ -80,12 +85,37 @@ def main():
     path = sys.argv[1]
     max_eps = int(sys.argv[2]) if len(sys.argv) > 2 else 6
     ev = []     # (t, d, ep, rc, bytes)
+    wall = None
+    rare = []   # stream and API events worth listing: (t, text)
+    sl = {0x01: [], 0x81: []}   # S lines: (t, completions, max gap)
+    n_f = 0
     with open(path) as f:
         for line in f:
             p = line.split()
             if len(p) >= 7 and p[0] == "U":
                 ev.append((float(p[1]), float(p[2]), int(p[3], 16), int(p[6]),
                            [int(x, 16) for x in p[7:]]))
+            elif not p:
+                continue
+            elif p[0] == "T" and len(p) == 2:
+                wall = float(p[1])
+            elif p[0] == "S" and len(p) == 5:
+                sl.setdefault(int(p[2], 16), []).append(
+                    (float(p[1]), int(p[3]), float(p[4])))
+            elif p[0] == "F" and len(p) == 7:
+                n_f += 1
+                if int(p[6]) != 0:
+                    rare.append((float(p[1]), "%s_frequency ch%s %s rc=%s "
+                                 "after %.1f ms" % (p[3], p[4], p[5], p[6],
+                                                    float(p[2]) / 1000)))
+            elif p[0] in "XGER":
+                what = {"X": "transfer not completed (status, length)",
+                        "G": "gap (us) before a completion",
+                        "E": "submit failed (rc)",
+                        "R": "sync call returned an error (duration us, dir, rc)"}[p[0]]
+                # R: when the call returned; the others: when it happened
+                tt = float(p[1]) + (float(p[2]) if p[0] == "R" else 0)
+                rare.append((tt, "%s %s: %s" % (p[0], what, " ".join(p[2:]))))
 
     n_req = n_in = 0
     tmo, mism = [], []          # event indices
@@ -166,6 +196,31 @@ def main():
             print("  Nios silent after a timed-out request (until the next "
                   "answer): median %.0f ms, max %.0f ms"
                   % (statistics.median(spans), spans[-1]))
+
+    if any(sl.values()) or rare or n_f:
+        print("\n  sample streams and API calls%s:" % (
+            "" if wall is None else " (trace started %s)" % time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(wall))))
+        for ep in sorted(sl):
+            v = sl[ep]
+            if v:
+                print("    endpoint %02x: %d one-second reports, %.1f-%.1f s, "
+                      "max gap %.1f ms" % (ep, len(v), v[0][0] / 1e6,
+                                           v[-1][0] / 1e6,
+                                           max(x[2] for x in v) / 1000))
+        print("    frequency calls %d; events (gaps, failed transfers, "
+              "submissions, sync and frequency calls): %d" % (n_f, len(rare)))
+        for tt, text in sorted(rare)[:60]:
+            print("    %12.3f s  %s" % (tt / 1e6, text))
+        for n, (i, ri, pend) in enumerate(open_at_tmo[:max_eps]):
+            tt = ev[i][0]
+            last = []
+            for ep in sorted(sl):
+                before = [x[0] for x in sl[ep] if x[0] <= tt]
+                last.append("%02x %s" % (ep, "%.3f s" % (before[-1] / 1e6)
+                                         if before else "never"))
+            print("    time-out %d at %.3f s: last one-second stream report "
+                  "before it: %s" % (n + 1, tt / 1e6, ", ".join(last)))
 
     for n, (i, ri, pend) in enumerate(open_at_tmo[:max_eps]):
         start = pend[2] if pend is not None else max(0, i - 8)
