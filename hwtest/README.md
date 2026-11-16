@@ -102,11 +102,13 @@ harness does not run them that way:
   `HWTEST_FIXES=1` and `HWTEST_TX=1`).
 * test_ctrl's `threads` case in host tuning mode: test_ctrl refuses it on
   the bladeRF 2.0 (Nuand issue #705). The harness runs it in FPGA tuning
-  mode only, and there it fails with every image and either libbladeRF
-  build: commands to the Nios time out, and the TX cap and the 300 s limit
-  also get in its way (TESTING.md, open item 4). Once, with the official
-  image, the bladeRF dropped off USB 25 s in and only came back when it was
-  unplugged and plugged in again, so unattended campaigns leave it out
+  mode only. There it fails with Nuand's libbladeRF and test on every
+  image, and passes with branch `host-fixes` run as Nuand's checklist runs
+  it (`bin/ctrl-threads-nuand.sh`, see Scripts; TESTING.md section 14). The
+  harness's own run of it (`ctrl_threads-fpga`) cannot pass: the TX cap
+  clamps the test's TX gains and the 300 s limit is too short. Three times,
+  with the official image, the bladeRF's FX3 stopped answering and only came
+  back after a power cycle, so unattended campaigns leave it out
   (`HWTEST_SKIP=ctrl_threads-fpga`).
 
 `test_rx_meta`'s two-channel variants overrun now and then, in either tuning
@@ -448,9 +450,11 @@ gain makes about -50 dBm there).
 | `bin/twoch-check.py` | Both RX channels, or both TX channels, at once through a splitter against the B200mini: levels, phase, sample alignment, gain independence, single vs two channels |
 | `bin/rf-lowband.py` | rf-check's TX and RX checks on the `HWTEST_RF_CH` channel at 70 to 433 MHz (where TX1 dips, TESTING.md section 13) |
 | `bin/tx-startup.py` | Records the first seconds of bladeRF transmissions with the B200mini (the start-up bursts, TESTING.md section 13) |
-| `bin/ctrl-threads-nuand.sh` | test_ctrl's threads case as Nuand's release checklist runs it: no TX cap, no time limit (needs every TX port on a load or behind >= 40 dB, and `HWTEST_TX_UNCAPPED_OK=1`) |
+| `bin/ctrl-threads-nuand.sh` | test_ctrl's threads case as Nuand's release checklist runs it: no TX cap, no time limit (needs every TX port on a load or behind >= 40 dB, and `HWTEST_TX_UNCAPPED_OK=1`). `FAST=1` runs the fast variant, `TRACE=1` traces every Nios packet and analyses the trace with `bin/nios-trace-threads.py`, `HOST_BUILD` picks the libbladeRF build |
 | `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |
+| `bin/nios-trace-threads.py` | Summarizes a Nios trace of any program: time-outs and what the Nios was busy with, late replies, Nios answer times, how long each RFIC command kept the Nios busy |
+| `lib/gain-readback.c` | Sets 14 RX1 gains in the three RX gain bands and reads them back, RX only (negative gains read back as -2147483648 in FPGA tuning mode without `host-fixes` 2c4fc532) |
