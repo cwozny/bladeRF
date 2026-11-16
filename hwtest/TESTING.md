@@ -93,6 +93,9 @@ commits for review:
 | 31fc2d7f nios: build the foxhunt firmware for Nios V | 3cb48e29 |
 | 820855ee doc: point to niosv_app.cmake for the Nios V compiler flags | part of 3cf193b0 |
 
+Built again from `niosv` (820855ee) with Quartus 25.1 on 2026-11-16,
+hostedxA5 is byte-identical to C (`b39357947802307a8aa156d5819e721d`).
+
 ## libbladeRF builds
 
 | Name | Source | Used for |
@@ -746,7 +749,8 @@ preload, no TX cap and no time limit (`HWTEST_TX_UNCAPPED_OK=1`; TX1 ->
 20 dB -> 20 dB -> B200mini RX2, the other ports on 50 ohm loads). `FAST=1`
 runs the checklist's fast variant (`-f`); `TRACE=1` records every Nios
 request and response (`lib/nios-trace.c`, analysed by
-`bin/nios-trace-threads.py`). The FPGA images and the FX3 firmware (2.6.0)
+`bin/nios-trace-threads.py`; since 8a29b565 also the frequency calls and
+the sample transfers). The FPGA images and the FX3 firmware (2.6.0)
 are the same throughout; only the host software differs. Results under
 `results/ctrlthreads-nuand-*`.
 
@@ -823,8 +827,27 @@ status polls that got no reply in time, all retried):
 
 "All fixes" is `host-fixes`' libbladeRF (b49041c9, 53632d98, 16eadeb5,
 cd405004, 92aef966, 2c4fc532) with its test_ctrl fixes 672266e6 and
-eab40910; the runs used the same changes under earlier commit IDs. The full
-variant with them is in progress.
+eab40910; the runs used the same changes under earlier commit IDs.
+
+**Full variant with all fixes and 250 ms** (`full-keep250-1116-0840`,
+untraced; the variant Nuand's checklist runs):
+
+- C: pass, 7,176 s, no failures.
+- A: one failure in 7,653 s. Near the end of the frequency thread's random
+  RX tuning, after the other three threads had finished, one frequency read
+  (`bladerf_get_frequency()`, an RFIC read) got no reply within 250 ms.
+  About 600 tunings later both sample streams failed: RX and TX transfers
+  that had waited 10 s timed out. Only the frequency thread was using the
+  device then, and frequency commands took at most 27 ms in the fast
+  traces, so the Nios should not have been busy for 250 ms. At the fast
+  traces' 6-7 ms a tuning, that puts the streams' stop a few seconds before
+  the read's time-out. The test streams through the FX3's firmware loopback,
+  which does not involve the FPGA (about 5,500 transfers of 64 KiB a second
+  each way, some 360 MB/s, in the rerun's trace), and the Nios's requests
+  and replies pass through the FX3 too. Every later Nios request was
+  answered, and the kernel logged no USB error. Not explained yet; a rerun
+  of the full variant, A then C, traced with the sample transfers and
+  frequency calls added to the trace, is running.
 
 **RX gain readbacks** (`lib/gain-readback.c`, RX only: 14 gains set and read
 back on RX1 at 420 MHz, 2 GHz and 5 GHz): with Nuand's libbladeRF in FPGA
@@ -1009,11 +1032,14 @@ here.
    `test_digital_loopback -l rfic` fails its first run after an image load or
    after another program transmitted. Same with Nuand's libbladeRF.
 4. `test_ctrl -T fpga -t threads` (Nuand's test): fails with Nuand's
-   libbladeRF and test on every image and passes with `host-fixes` on A and
-   C (fast variant; the full variant is in progress). The failures came from
-   three libbladeRF bugs and two bugs in the test, not from the images
-   (section 14). Still open: the FX3 stopped answering three times, all on
-   A, cause unknown (section 14). The harness's own run of the test
+   libbladeRF and test on every image. Those failures came from three
+   libbladeRF bugs and two bugs in the test, not from the images (section
+   14). With `host-fixes` the fast variant passes on A and C and the full
+   variant on C; the full variant on A had one failure: a frequency read got
+   no reply, and the sample streams, which loop back in the FX3, stopped at
+   about the same time (section 14; a traced rerun is running). Also open:
+   the FX3 stopped answering three times, all on A, cause unknown (section
+   14). The harness's own run of the test
    (`ctrl_threads-fpga`, with the TX cap and a 5-minute limit) cannot pass:
    the cap clamps the gain thread's TX gains, and the test needs about 10
    minutes. It stays out of unattended campaigns

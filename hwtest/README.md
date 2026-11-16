@@ -450,11 +450,11 @@ gain makes about -50 dBm there).
 | `bin/twoch-check.py` | Both RX channels, or both TX channels, at once through a splitter against the B200mini: levels, phase, sample alignment, gain independence, single vs two channels |
 | `bin/rf-lowband.py` | rf-check's TX and RX checks on the `HWTEST_RF_CH` channel at 70 to 433 MHz (where TX1 dips, TESTING.md section 13) |
 | `bin/tx-startup.py` | Records the first seconds of bladeRF transmissions with the B200mini (the start-up bursts, TESTING.md section 13) |
-| `bin/ctrl-threads-nuand.sh` | test_ctrl's threads case as Nuand's release checklist runs it: no TX cap, no time limit (needs every TX port on a load or behind >= 40 dB, and `HWTEST_TX_UNCAPPED_OK=1`). `FAST=1` runs the fast variant, `TRACE=1` traces every Nios packet and analyses the trace with `bin/nios-trace-threads.py`, `HOST_BUILD` picks the libbladeRF build |
+| `bin/ctrl-threads-nuand.sh` | test_ctrl's threads case as Nuand's release checklist runs it: no TX cap, no time limit (needs every TX port on a load or behind >= 40 dB, and `HWTEST_TX_UNCAPPED_OK=1`). `FAST=1` runs the fast variant, `TRACE=1` traces every Nios packet, frequency call and sample transfer and analyses the trace with `bin/nios-trace-threads.py`, `HOST_BUILD` picks the libbladeRF build |
 | `bin/foxhunt-check.py` | Loads a foxhunt image and decodes its Morse transmission with the B200mini |
 | `lib/hwtest-stream.c` | Streaming checks (every sample) in every format and layout, captures, triggers, the AD9361 BIST pattern (built into `host-build/output/hwtest-stream`) |
 | `bin/compare.py` | Compares result directories and flags regressions |
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |
-| `bin/nios-trace-threads.py` | Summarizes a Nios trace of any program: time-outs and what the Nios was busy with, late replies, Nios answer times, how long each RFIC command kept the Nios busy |
+| `bin/nios-trace-threads.py` | Summarizes a Nios trace of any program: time-outs and what the Nios was busy with, late replies, Nios answer times, how long each RFIC command kept the Nios busy, sample-stream gaps and failed transfers |
 | `lib/gain-readback.c` | Sets 14 RX1 gains in the three RX gain bands and reads them back, RX only (negative gains read back as -2147483648 in FPGA tuning mode without `host-fixes` 2c4fc532) |
