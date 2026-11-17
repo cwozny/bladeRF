@@ -4,7 +4,7 @@
 #
 #   bw-diag.sh <image label>...     e.g. A-official-v0.16.0 C-niosv-q25.1
 #
-# For each $HWTEST_HOME/images/<label>.rbf: loads it (volatile), runs the full
+# For each $IMAGES_DIR/<label>.rbf (images/, or images-xA9/ with HWTEST_FPGA=A9): loads it (volatile), runs the full
 # bandwidth test in FPGA tuning mode (default seed: the same bandwidths as the
 # deep phase) with every Nios packet traced by lib/nios-trace.c, and analyzes
 # the trace with nios-trace-analyze.py. Afterwards the official image is
@@ -28,8 +28,9 @@ cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$SO" "$HWTEST_DIR/lib/nios-trace.c" -ldl || die "cannot build the trace shim"
 
 for label in "$@"; do
-    img="$HWTEST_HOME/images/$label.rbf"
+    img="$IMAGES_DIR/$label.rbf"
     [ -f "$img" ] || die "no such image: $img"
+    check_image_variant "$img"
     log "=== $label"
     if ! "$BCLI" -l "$img" > "$out/$label.load.log" 2>&1 ||
        ! "$BCLI" -e version > "$out/$label.version.log" 2>&1 ||

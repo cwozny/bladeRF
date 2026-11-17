@@ -50,7 +50,9 @@
 # twoch phases are skipped. Retunes are then exercised with RX retunes
 # scheduled on timestamps (test_scheduled_retune), which also runs in TX mode.
 #
-# Environment: HOST_BUILD selects the libbladeRF build under test (default
+# Environment: HWTEST_FPGA=A5|A9 is the FPGA variant of the board (default A5,
+# the xA5; lib/fpga-variant.sh): the run stops unless the board and the image
+# are that variant. HOST_BUILD selects the libbladeRF build under test (default
 # $HWTEST_HOME/host-build); HWTEST_SKIP=<test>,<test>,... leaves those tests
 # out (logged, not in summary.jsonl); HWTEST_FIXES=1 says HOST_BUILD has the
 # libbladeRF fixes of branch host-fixes and also runs what fails with every
@@ -78,6 +80,8 @@ phases=("$@"); [ ${#phases[@]} -gt 0 ] || phases=(smoke host fpga rf)
 [ -f "$image" ] || die "no such image: $image"
 check_good_images
 check_search_path
+check_image_variant "$image"
+check_fpga_variant
 
 out="$RESULTS_DIR/$label/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out/logs"
@@ -107,6 +111,7 @@ fi
 cat > "$out/meta.json" <<EOF
 {"label": "$label", "image": "$image", "image_md5": "$(md5_of "$image")",
  "phases": "${phases[*]}", "tx": $(tx_ok && echo true || echo false), "rf_ch": $RF_CH, "twoch": "$TWOCH",
+ "fpga": "$HWTEST_FPGA", "serial": "$DEVICE_SERIAL",
  "start": "$(date -Is)", "host": "$(hostname)",
  "host_sw": "$(git -C "$HWTEST_DIR/.." describe --always --dirty 2>/dev/null)",
  "host_build": "$HOST_BUILD", "skip": "${HWTEST_SKIP:-}", "fixes": "$FIXES"}
@@ -492,7 +497,8 @@ for phase in "${phases[@]}"; do
         # the RX data port (hwtest-stream bist), so every sample crosses the
         # AD9361-to-FPGA LVDS interface with a known value: the xA5's one
         # timing path with negative setup slack (Nuand's image -0.154 ns,
-        # the Nios V build -0.110 ns) is the capture of that interface. The
+        # the Nios V build -0.110 ns; for the xA9 the Nios V build meets
+        # timing there) is the capture of that interface. The
         # AD9361 sends both channels over it whichever are streamed (2R2T
         # framing: four DATA_CLK cycles per sample, see
         # axi_ad9361_dev_if_alt.v), so its clock is 4 x the sample rate.

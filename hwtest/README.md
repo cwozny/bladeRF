@@ -1,7 +1,8 @@
 # bladeRF 2.0 micro hardware regression harness
 
 Scripts for comparing FPGA images (e.g. Nios II vs Nios V builds) on a real
-bladeRF 2.0 micro xA5, unattended, without any risk of bricking it.
+bladeRF 2.0 micro xA5, unattended, without any risk of bricking it. An xA9
+works the same way with `HWTEST_FPGA=A9` (see "FPGA variants" below).
 [TESTING.md](TESTING.md) records what was tested with them, how, and the
 results.
 
@@ -33,6 +34,21 @@ results.
     hwtest/bin/build-host.sh                 # libbladeRF, bladeRF-cli, tests
 
 Data (host build, backups, results) goes to `~/workarea/hwtest-data/`.
+
+## FPGA variants (`HWTEST_FPGA`)
+
+The scripts default to the xA5 (`HWTEST_FPGA=A5`): Nuand's official
+`hostedxA5.rbf` in `~/workarea/official_fpga/v0.16.0/` and the images under
+test in `~/workarea/hwtest-data/images/`. For an xA9 set `HWTEST_FPGA=A9`
+(for a campaign, in its environment): `hostedxA9.rbf` and
+`~/workarea/hwtest-data/images-xA9/` (`IMAGES_DIR` overrides the directory).
+`lib/fpga-variant.sh` holds each variant's FPGA size, bitstream size and
+official md5. Every image of a variant has the same size and libbladeRF
+refuses one of the wrong size for the board, so a mix-up cannot load
+anything; the scripts stop before that, when the board (`bladeRF-cli -e
+info`, "FPGA size") or an image is not the variant `HWTEST_FPGA` names.
+recover.sh then exits with status 4 instead of climbing its ladder. Each
+run's meta.json records the variant and the board's serial number.
 
 ## Receive-only runs (default)
 

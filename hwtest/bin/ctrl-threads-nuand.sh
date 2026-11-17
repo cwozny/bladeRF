@@ -4,7 +4,8 @@
 # libbladeRF from $HOST_BUILD (default: the main build, Nuand's libbladeRF), NO harness preload (no
 # TX cap, no no-TX guard) and no harness time limit; only a watchdog against a real hang
 # (WATCHDOG seconds, default 2700). FAST=1 (default) adds -f, the fast variant; FAST=0 runs the
-# full test as the checklist does. IMAGES (default "C A"; A, B or C). TRACE=1 preloads lib/nios-trace.c
+# full test as the checklist does. IMAGES (default "C A"; A, B or C, from images/, or images-xA9/ with
+# HWTEST_FPGA=A9 for an xA9: lib/fpga-variant.sh; the board must be that variant). TRACE=1 preloads lib/nios-trace.c
 # (observation only: it logs every Nios packet, frequency and bandwidth call and failed sync call
 # with its timing, and how the sample transfers complete, and changes nothing) and analyzes the
 # trace with nios-trace-threads.py. The shim flushes its log every second, so a run the watchdog
@@ -26,7 +27,8 @@ fi
 HOST_BUILD=${HOST_BUILD:-$HOME/workarea/hwtest-data/host-build}
 export HOST_BUILD
 T=$HOST_BUILD/output
-IMG=~/workarea/hwtest-data/images
+. "$H/lib/fpga-variant.sh"      # HWTEST_FPGA (A5, the default, or A9) -> IMAGES_DIR
+IMG=$IMAGES_DIR
 OUT=~/workarea/hwtest-data/results/ctrlthreads-nuand${LABEL:+-$LABEL}-$(date +%m%d-%H%M)
 mkdir -p $OUT
 args="-T fpga -t threads"
@@ -48,6 +50,13 @@ img() {
     esac
 }
 on_usb() { lsusb -d 2cf0:5250 > /dev/null 2>&1; }
+for i in ${IMAGES:-C A}; do
+    f=$(img $i) || exit 2
+    rbf_size_ok "$f" || { echo "$f is missing or not an $HWTEST_FPGA image (HWTEST_FPGA)"; exit 2; }
+done
+kle=$(device_info "$H/bin/bladerf-cli-safe" | info_fpga_kle)
+[ "$kle" = "$FPGA_KLE" ] || {
+    echo "the bladeRF's FPGA is ${kle:-not readable} (KLE), not the $FPGA_KLE KLE of HWTEST_FPGA=$HWTEST_FPGA"; exit 2; }
 for i in ${IMAGES:-C A}; do
     on_usb || { echo "[$(date +%T)] bladeRF is not on USB before $i: stopping"; exit 3; }
     $H/bin/bladerf-cli-safe -l "$(img $i)" > $OUT/load-$i.log 2>&1 || { echo "load $i failed"; exit 2; }

@@ -18,7 +18,12 @@ if usb_present "$FX3_BOOTLOADER_USB_ID"; then
 fi
 usb_present "$BLADERF2_USB_ID" || die "no bladeRF 2.0 micro (2cf0:5250) on USB"
 
-log "Probe and versions (opening the device may load hostedxA5.rbf if the FPGA is unconfigured)"
+# An empty search path: libbladeRF then loads no FPGA image on open, so
+# "FPGA loaded" shows whether the board configured its FPGA by itself (an
+# autoload image in its flash) or not
+export BLADERF_SEARCH_DIR="$out/empty-search-dir"
+mkdir -p "$BLADERF_SEARCH_DIR"
+log "Probe and versions (nothing is autoloaded: BLADERF_SEARCH_DIR is empty)"
 bcli -p
 bcli -e "version" -e "info"
 

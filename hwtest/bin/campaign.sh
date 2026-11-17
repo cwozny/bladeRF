@@ -8,8 +8,10 @@
 # FULLSOAK_RX_MIN, FULLSOAK_LOOP_MIN, BIST_MIN, SCHED_S, HOST_BUILD,
 # HWTEST_SKIP, HWTEST_FIXES; see run-suite.sh); blank lines and # comments
 # are ignored. HWTEST_TX, HWTEST_RF_CH and HWTEST_2CH describe the cabling,
-# so they apply to the whole campaign: set them in its environment, not per
-# line (a plan that sets them on a line is refused before anything runs).
+# and HWTEST_FPGA the board, so they apply to the whole campaign: set them in
+# its environment, not per line (a plan that sets them on a line is refused
+# before anything runs, as is one with an image that is missing or of another
+# FPGA variant, or a board of another variant).
 # After each run the board is brought back to the official image with
 # recover.sh; if that needs a human (replug, bootloader), the campaign
 # stops, since every later run would fail anyway. The campaign log goes to
@@ -23,14 +25,22 @@ mapfile -t lines < "$1"
 check_good_images
 # A cabling variable on a plan line would reach run-suite.sh as a phase name
 # and only fail when that phase came up, hours in
-if sed 's/#.*//' "$1" | grep -Eq '(^|[[:space:]])(HWTEST_TX|HWTEST_RF_CH|HWTEST_2CH)='; then
-    die "$1 sets HWTEST_TX, HWTEST_RF_CH or HWTEST_2CH on a plan line: they describe the cabling, so set them in the campaign's environment"
+if sed 's/#.*//' "$1" | grep -Eq '(^|[[:space:]])(HWTEST_TX|HWTEST_RF_CH|HWTEST_2CH|HWTEST_FPGA)='; then
+    die "$1 sets HWTEST_TX, HWTEST_RF_CH, HWTEST_2CH or HWTEST_FPGA on a plan line: they describe the cabling and the board, so set them in the campaign's environment"
 fi
+# Every image of the plan must exist and be a $HWTEST_FPGA image, and the
+# board must have that FPGA: find out now, not hours in
+while read -r img _; do
+    img="${img/#\~/$HOME}"
+    [ -f "$img" ] || die "$1: no such image: $img"
+    check_image_variant "$img"
+done < <(sed 's/#.*//' "$1" | grep -v '^[[:space:]]*$')
+check_fpga_variant
 
 logf="$RESULTS_DIR/campaign-$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "$RESULTS_DIR"
 exec > >(tee -a "$logf") 2>&1
-log "campaign plan $1 (TX mode: ${HWTEST_TX}, RF channel: ${HWTEST_RF_CH:-2}, two-channel setup: ${HWTEST_2CH:-none})"
+log "campaign plan $1 (FPGA variant: $HWTEST_FPGA, bladeRF $DEVICE_SERIAL; TX mode: ${HWTEST_TX}, RF channel: ${HWTEST_RF_CH:-2}, two-channel setup: ${HWTEST_2CH:-none})"
 sed 's/^/    /' "$1"
 
 n=0

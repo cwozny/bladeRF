@@ -83,10 +83,23 @@ def rf_channel(d):
         return None
 
 
+def board(d):
+    """(FPGA variant, serial number) of the run's bladeRF; older runs: the xA5."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            m = json.load(f)
+        return m.get("fpga", "A5"), m.get("serial") or "?"
+    except (OSError, ValueError):
+        return None
+
+
 def compare(base, cand):
     flags = []
     (tb, sb), (tc, sc) = tests(base), tests(cand)
     print("\n=== %s  vs  %s" % (base, cand))
+    if board(base) != board(cand):
+        # A unit-to-unit comparison: not a problem, but say so
+        print("NOTE: different boards (baseline %s, candidate %s)" % (board(base), board(cand)))
     if tx_mode(base) != tx_mode(cand):
         # Receive-only runs leave out the TX tests: compare like with like
         print("WARNING: TX mode differs (baseline tx=%s, candidate tx=%s)"

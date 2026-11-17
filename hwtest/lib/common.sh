@@ -9,9 +9,13 @@ HWTEST_HOME="${HWTEST_HOME:-$HOME/workarea/hwtest-data}"
 export HOST_BUILD="${HOST_BUILD:-$HWTEST_HOME/host-build}"
 RESULTS_DIR="${RESULTS_DIR:-$HWTEST_HOME/results}"
 
-# Known-good images: Nuand's official FPGA v0.16.0 and FX3 firmware v2.6.0
-GOOD_RBF="${GOOD_RBF:-$HOME/workarea/official_fpga/v0.16.0/hostedxA5.rbf}"
-GOOD_RBF_MD5="be0909dc27b48a08c54db33675130f27"
+# FPGA variant under test (HWTEST_FPGA: A5, the default, or A9) and its
+# images (IMAGES_DIR)
+. "$HWTEST_DIR/lib/fpga-variant.sh"
+
+# Known-good images: Nuand's official FPGA v0.16.0 for that variant
+# (GOOD_RBF_MD5 is in fpga-variant.sh) and FX3 firmware v2.6.0
+GOOD_RBF="${GOOD_RBF:-$HOME/workarea/official_fpga/v0.16.0/$GOOD_RBF_NAME}"
 FX3_IMG="${FX3_IMG:-$HWTEST_HOME/fx3/bladeRF_fw_v2.6.0.img}"
 FX3_IMG_MD5="7cc51b4eedebf54dd01be83745d1c59f"
 
@@ -20,10 +24,10 @@ BLADERF2_USB_ID="2cf0:5250"     # bladeRF 2.0 micro, normal mode
 FX3_BOOTLOADER_USB_ID="04b4:00f3"  # Cypress FX3 bootloader (recovery mode)
 B200MINI_USB_ID="2500:0021"
 
-# libbladeRF loads hostedxA5.rbf from its search path whenever the FPGA is
-# unconfigured (e.g. after a power cycle or FX3 reset). BLADERF_SEARCH_DIR is
-# searched first: point it at the official image so the board always comes
-# back known-good.
+# libbladeRF loads hostedxA5.rbf (xA9: hostedxA9.rbf) from its search path
+# whenever the FPGA is unconfigured (e.g. after a power cycle or FX3 reset).
+# BLADERF_SEARCH_DIR is searched first: point it at the official image so the
+# board always comes back known-good.
 export BLADERF_SEARCH_DIR="$HWTEST_HOME/autoload"
 
 BLADERF_CLI_BIN="$HOST_BUILD/output/bladeRF-cli"
@@ -100,6 +104,24 @@ check_good_images() {
         die "known-good FPGA image has the wrong md5: $GOOD_RBF"
 }
 
+# Stop unless the connected bladeRF has the FPGA variant HWTEST_FPGA names.
+# Sets DEVICE_SERIAL (for the results).
+check_fpga_variant() {
+    local info kle
+    info=$(device_info "$BCLI")
+    kle=$(info_fpga_kle <<< "$info")
+    DEVICE_SERIAL=$(info_serial <<< "$info")
+    [ -n "$kle" ] || die "cannot read the bladeRF's FPGA size (bladeRF-cli -e info)"
+    [ "$kle" = "$FPGA_KLE" ] ||
+        die "the bladeRF has a $kle KLE FPGA, not the $FPGA_KLE KLE of HWTEST_FPGA=$HWTEST_FPGA: set HWTEST_FPGA (A5 or A9)"
+}
+
+# Stop unless the image is the size of a $HWTEST_FPGA bitstream
+check_image_variant() {     # check_image_variant <image.rbf>
+    rbf_size_ok "$1" ||
+        die "$1 is not an $HWTEST_FPGA image ($(stat -L -c %s "$1" 2>/dev/null) bytes, expected $RBF_BYTES)"
+}
+
 # Refuse to run with a bladeRF.conf/bladerf.conf on libbladeRF's search path:
 # it is applied on every open and can load an FPGA image or change settings.
 # Also (re)create the autoload link to the official image.
@@ -116,5 +138,8 @@ check_search_path() {
     done
     [ "$bad" -eq 0 ] || die "remove the libbladeRF config file(s) above before testing"
     mkdir -p "$BLADERF_SEARCH_DIR"
-    ln -sfn "$GOOD_RBF" "$BLADERF_SEARCH_DIR/hostedxA5.rbf"
+    # One link per variant (an earlier run's link for the other variant stays
+    # and points at that variant's official image: libbladeRF picks the file
+    # by the board's FPGA size)
+    ln -sfn "$GOOD_RBF" "$BLADERF_SEARCH_DIR/$GOOD_RBF_NAME"
 }

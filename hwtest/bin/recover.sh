@@ -16,10 +16,21 @@
 #      itself, its flash firmware is damaged: stop and report (fixing that
 #      needs a flash write, which this harness never does on its own).
 #   6. give up: ask for a physical unplug/replug (exit status 3)
-# Exit status: 0 recovered, 2 bootloader-only (needs a human decision), 3 replug
+# A board that answers with another FPGA variant than HWTEST_FPGA cannot take
+# this variant's official image: that stops before the ladder (exit status 4).
+# Exit status: 0 recovered, 2 bootloader-only (needs a human decision), 3 replug,
+# 4 wrong HWTEST_FPGA for the board
 set -uo pipefail
 . "$(dirname "$0")/../lib/common.sh"
 check_good_images
+
+if usb_present "$BLADERF2_USB_ID"; then
+    kle=$(device_info "$BCLI" | info_fpga_kle)
+    if [ -n "$kle" ] && [ "$kle" != "$FPGA_KLE" ]; then
+        log "recover: the bladeRF has a $kle KLE FPGA, not the $FPGA_KLE KLE of HWTEST_FPGA=$HWTEST_FPGA: set HWTEST_FPGA (A5 or A9)"
+        exit 4
+    fi
+fi
 
 good_version_ok() {
     # Open normally and check that the FPGA answers with the expected version.
