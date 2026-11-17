@@ -100,6 +100,12 @@ commits for review:
 Built again from `niosv` (820855ee) with Quartus 25.1 on 2026-11-16,
 hostedxA5 is byte-identical to C (`b39357947802307a8aa156d5819e721d`).
 
+For a second board, an xA9 (Cyclone V 5CEBA9; `HWTEST_FPGA=A9`, images in
+`images-xA9/`), the same three were built as hostedxA9 on 2026-11-17: A
+`1ab3bc8bdcf16a5f0ddf3fcdbaa6556b` (Nuand's), B
+`3c7e86602829af36f29c7e2165e14883` (d984883b, 23.1.1) and C
+`fd73509cc7444ec1db0af6efb3482728` (820855ee, 25.1).
+
 ## libbladeRF builds
 
 | Name | Source | Used for |
@@ -146,12 +152,14 @@ phases (details in run-suite.sh):
 
 ## Results
 
-### 1. Reproducing Nuand's image (2026-11-12)
+### 1. Reproducing Nuand's image (2026-11-12; xA9 2026-11-17)
 
 FPGA v0.16.0 hostedxA5 built with Quartus Prime Lite 23.1.1 (23.1std.1
 b993) is byte-identical to Nuand's official image (md5 above). 23.1.0 and
 20.1.1 give different bitstreams. So 23.1.1 is the reference toolchain for
-image B.
+image B. The same holds for the xA9: hostedxA9 built from fpga_v0.16.0
+(f746c5bd) with 23.1.1 is byte-identical to Nuand's official hostedxA9.rbf
+(`1ab3bc8bdcf16a5f0ddf3fcdbaa6556b`).
 
 ### 2. Build checks with Quartus 25.1 and Nios V
 
@@ -161,10 +169,13 @@ image B.
 | hostedxA5 (C) | 7,868 ALMs (27 %) | 273 / 446 (61 %) | −0.110 ns | +0.058 ns |
 | hostedxA9 | 7,833 ALMs (7 %) | 273 / 1,220 (22 %) | +0.523 ns | +0.066 ns |
 | for comparison: hostedxA5 v0.16.0, Nios II/e, Quartus 23.1.1 (A; B is the same) | 6,757 ALMs (23 %) | 274 / 446 (61 %) | −0.154 ns | |
+| for comparison: hostedxA9 v0.16.0, Nios II/e, Quartus 23.1.1 (A; B has the same numbers) | 6,754 ALMs (6 %) | 274 / 1,220 (22 %) | +0.522 ns | +0.010 ns |
 
 The Nios V/m takes 1,111 more ALMs (and 1,778 more registers) than the
 Nios II/e on the xA5. B's fit and timing are identical to A's (same Fmax for
-every clock).
+every clock). The hostedxA9 C row is the build from 99f1b2d5 (2026-11-13);
+built again from 820855ee on 2026-11-17 it is byte-identical
+(`fd73509cc7444ec1db0af6efb3482728`).
 
 The FPGA's whole RX/TX sample logic (FIFOs, metadata, loopback) runs on the
 LVDS receiver's slow clock (`ad9361.clock`, `pll_sclk`): half the AD9361's
