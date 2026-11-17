@@ -39,7 +39,9 @@ every command that could write it).
 **Host:** Dell XPS 13 9310, Linux Mint 22.3 (Ubuntu 24.04 base), USB 3
 SuperSpeed. Until 2026-11-13 09:55 the bladeRF was on a USB-C port of the
 laptop; after that it was behind the VIA hub of a USB-C adapter (port 2-1.3).
-Timings from before and after that change do not compare.
+Timings from before and after that change do not compare. On 2026-11-16 at
+22:07 it moved to the laptop's other USB-C port (2-3), and the B200mini,
+which had that port, went off USB (section 14).
 
 **RF reference:** an Ettus USRP B200mini (UHD, python3-uhd), an independent
 radio that transmits and measures for `bin/rf-check.py` and
@@ -51,10 +53,12 @@ radio that transmits and measures for `bin/rf-check.py` and
 |---|---|---|---|---|
 | until 2026-11-13 09:55 (receive-only) | antenna | antenna | antenna | antenna |
 | from 2026-11-13 (transmit tests) | 50 Ω load | 50 Ω load | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX |
+| 2026-11-15 07:52 (channel 1, section 13) | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX | 50 Ω load | 50 Ω load |
+| from 2026-11-15 10:43 (Nuand's threads test, section 14) | 20 dB → 20 dB → B200mini RX2 | 50 Ω load | 50 Ω load | 50 Ω load |
 
 Receive-only runs preload the no-TX guard (`lib/no-tx-guard.c`): nothing can
-enable a TX channel. Transmit runs (`HWTEST_TX=1`, only with the second
-cabling) preload the TX cap (`lib/tx-cap.c`, bladeRF TX gain ≤ 60 dB on both
+enable a TX channel. Transmit runs (`HWTEST_TX=1`, only with one of the
+transmit cablings) preload the TX cap (`lib/tx-cap.c`, bladeRF TX gain ≤ 60 dB on both
 channels, about 0 dBm) and limit the B200mini's TX gain to 65 dB, so neither
 receiver sees more than about −20 dBm.
 
@@ -739,7 +743,7 @@ investigated. rf-check.py, pulse-check.py and twoch-check.py now measure a
 transmission 1 s after its signal first appears (`TX_SETTLE_S`, feeb443d);
 before, a measurement could land in the bursts.
 
-### 14. Nuand's threads test as Nuand runs it, and what made it fail (2026-11-15/16)
+### 14. Nuand's threads test as Nuand runs it, and what made it fail (2026-11-15 to 17)
 
 `test_ctrl -T fpga -t threads` streams RX and TX through the FX3's firmware
 loopback while four threads change gains (75 sweeps), bandwidths (25
@@ -750,9 +754,12 @@ preload, no TX cap and no time limit (`HWTEST_TX_UNCAPPED_OK=1`; TX1 ->
 runs the checklist's fast variant (`-f`); `TRACE=1` records every Nios
 request and response (`lib/nios-trace.c`, analysed by
 `bin/nios-trace-threads.py`; since 8a29b565 also the frequency calls and
-the sample transfers). The FPGA images and the FX3 firmware (2.6.0)
-are the same throughout; only the host software differs. Results under
-`results/ctrlthreads-nuand-*`.
+the sample transfers; c65f0630 moved its logging to a ring buffer and a
+writer thread, to disturb the threads' timing less: checked with its
+self-test, 1 million records, and receive runs in both tuning modes,
+nothing dropped, but not yet used for a threads run). The FPGA images and
+the FX3 firmware (2.6.0) are the same throughout; only the host software
+differs. Results under `results/ctrlthreads-nuand-*`.
 
 **With Nuand's libbladeRF and test.**
 
@@ -845,9 +852,62 @@ untraced; the variant Nuand's checklist runs):
   which does not involve the FPGA (about 5,500 transfers of 64 KiB a second
   each way, some 360 MB/s, in the rerun's trace), and the Nios's requests
   and replies pass through the FX3 too. Every later Nios request was
-  answered, and the kernel logged no USB error. Not explained yet; a rerun
-  of the full variant, A then C, traced with the sample transfers and
-  frequency calls added to the trace, is running.
+  answered, and the kernel logged no USB error. Not explained; one of the
+  three stops counted below.
+
+**Full variant again, traced** (`full-trace-keep250-1116-1259`, with the
+sample transfers and frequency calls in the trace):
+
+- A: 54 failures in 7,766 s, every one a frequency readback of 420 MHz (the
+  test's race below). No stream stalled: the longest gap between RX
+  transfers was 34.5 ms. 15,904 replies timed out (15,903 status polls
+  during bandwidth changes, polled again, and 1 during RFIC
+  initialization); 745 late replies were discarded.
+- C: after 3,687 s both streams stopped, and then the FX3 stopped
+  answering (below).
+
+**The test's own race: test_gain's 420 MHz** (not changed on `host-fixes`;
+upstream draft 7f). Before it tests a channel, test_gain sets it to 420 MHz,
+a 2018 workaround for FPGA v0.10.2 (d1a9c8e1). In the threads test the gain
+thread does that 75 times per channel while the frequency thread sets and
+reads back frequencies on the same channels, and RX1 and RX2 share the
+AD9361's RX LO (TX1 and TX2 its TX LO). A 420 MHz set that lands between the
+frequency thread's set and its readback fails the readback: "Frequency
+(4951000000) != Readback value (420000000)". The gain thread always finished
+before the frequency thread's TX sweep, so only RX readbacks failed. Seen in
+0 of 2 untraced full runs behind the hub, in 4 of 7 with the bladeRF on its
+own port (6 failures, both images; next paragraph) and 54 times in the
+traced run on A. Whether the workaround is still needed is for Nuand to say:
+with FX3 firmware 2.5.0 or later, libbladeRF refuses FPGAs older than
+v0.16.0.
+
+**Behind the hub and on its own port.** From 2026-11-13 the bladeRF was
+behind the USB 3 hub in the laptop's USB-C adapter, which also carries the
+laptop's wired network adapter and is powered by its charger. On 2026-11-16
+at 22:07 it moved to the laptop's other USB-C port (2-3, SuperSpeed). Seven
+untraced full runs there, A and C in turn, with all fixes and 250 ms
+(`results/ctrlthreads-nuand-direct-*`):
+
+| Run | Image | Result | Seconds | Failures |
+|---|---|---|---|---|
+| 1 | C | fail | 6,857 | 1, the race |
+| 2 | A | fail | 7,480 | 1, the race |
+| 3 | C | pass | 6,756 | 0 |
+| 4 | A | pass | 7,710 | 0 |
+| 5 | C | fail | 6,449 | 2, the race |
+| 6 | A | pass | 7,700 | 0 |
+| 7 | C | fail | 6,821 | 2, the race |
+
+In these 13.8 h no stream stopped, no RFIC command timed out and the FX3
+always answered. Behind the hub the runs with the fixes had stopped 3 times
+in 8.1 h on 2026-11-16 (from the 07:22 run in the table on, which lacked
+eab40910; a run that stopped counted up to its stop): the FX3 at 07:30 (A)
+and at 16:11 (C), and the streams of the full run on A. If the hub made no
+difference, all three stops would fall in the hub's hours with a
+probability of (8.1/21.9)^3, about 0.05. The move also changed the
+bladeRF's power source (the charger through the adapter, then the laptop's
+port), and the hub's hours include fast and traced runs, so this points at
+the hub or its power but does not separate them.
 
 **RX gain readbacks** (`lib/gain-readback.c`, RX only: 14 gains set and read
 back on RX1 at 420 MHz, 2 GHz and 5 GHz): with Nuand's libbladeRF in FPGA
@@ -855,14 +915,17 @@ tuning mode the 5 gains with a negative full-stage value read back as
 -2147483648, on A and on C; host tuning mode reads all 14 correctly; with
 2c4fc532 all 14 are correct in both modes on both images.
 
-**Not explained: the FX3 stopped answering**, three times, all on A: on
-2026-11-13 (25 s into a capped run), on 2026-11-15 at 16:17 (after the bad
-configuration-register write above), and on 2026-11-16 at 07:30 (498 s into
-the run in the table, with no such write: one reply came 1 s late, 250 more
-requests got none, both streams stopped, and then the FX3 answered neither
-USB control requests nor device-descriptor reads; recover.sh's software
-steps could not bring it back). Not seen on C, which has had fewer of these
-runs.
+**Not explained: the FX3 stopped answering**, four times, always behind the
+hub. Three times on A: on 2026-11-13 (25 s into a capped run), on 2026-11-15
+at 16:17 (after the bad configuration-register write above), and on
+2026-11-16 at 07:30 (498 s into the run in the table, with no such write:
+one reply came 1 s late, 250 more requests got none, both streams stopped,
+and then the FX3 answered neither USB control requests nor device-descriptor
+reads). Once on C, on 2026-11-16 at 16:11, 3,687 s into the traced full run:
+both loopback streams stopped first, the Nios answered for 9.8 s more, then
+nothing did; a raw libusb probe got no answer to control requests and I/O
+errors on the bulk endpoints. Each time only a power cycle or a replug
+brought it back.
 
 **At the end of every run** "TX failed ... Transfer timed out for TX buffer"
 is printed after the four threads have joined: test_threads stops the RX
@@ -968,6 +1031,12 @@ here.
 - Before: "Requested timestamp is in the past" with the official image. After:
   passes in every run since, all images, both tuning modes, e.g. 135 times in
   a row in the C transmit soak.
+- The 64 RX buffers against Nuand's 16, both binaries with the tuning
+  change and `host-fixes`' libbladeRF (`results/sched-ab-1116-2208`,
+  2026-11-16, bladeRF on its own port, receive only, 30 runs per image and
+  tuning mode): with 16 buffers 72 of 120 runs failed
+  ("Requested timestamp is in the past", from the third iteration on; A 40
+  of 60, C 32 of 60), with 64 buffers none of 120.
 
 #### 92aef966 libbladeRF: lock the device while looking up gain ranges
 
@@ -1034,12 +1103,15 @@ here.
 4. `test_ctrl -T fpga -t threads` (Nuand's test): fails with Nuand's
    libbladeRF and test on every image. Those failures came from three
    libbladeRF bugs and two bugs in the test, not from the images (section
-   14). With `host-fixes` the fast variant passes on A and C and the full
-   variant on C; the full variant on A had one failure: a frequency read got
-   no reply, and the sample streams, which loop back in the FX3, stopped at
-   about the same time (section 14; a traced rerun is running). Also open:
-   the FX3 stopped answering three times, all on A, cause unknown (section
-   14). The harness's own run of the test
+   14). With `host-fixes` the fast variant passes on A and C. In 11 full
+   runs since, the only failures were the test's own race (test_gain's
+   420 MHz set, left for Nuand to decide) and, with the bladeRF behind a USB
+   hub, two stops: the sample streams, which loop back in the FX3, stopped
+   (A), and the streams stopped and then the FX3 did not answer until a
+   power cycle (C). A fast run on A hung the FX3 the same way; four such
+   hangs since 2026-11-13, all behind the hub. Seven full runs with the
+   bladeRF on its own port had no stop; the cause is open (section 14).
+   The harness's own run of the test
    (`ctrl_threads-fpga`, with the TX cap and a 5-minute limit) cannot pass:
    the cap clamps the gain thread's TX gains, and the test needs about 10
    minutes. It stays out of unattended campaigns
