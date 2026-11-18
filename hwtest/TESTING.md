@@ -1185,9 +1185,11 @@ here.
    420 MHz set, left for Nuand to decide) and, with the bladeRF behind a USB
    hub, two stops: the sample streams, which loop back in the FX3, stopped
    (A), and the streams stopped and then the FX3 did not answer until a
-   power cycle (C). A fast run on A hung the FX3 the same way; four such
-   hangs since 2026-11-13, all behind the hub. Seven full runs with the
-   bladeRF on its own port had no stop; the cause is open (section 14).
+   power cycle (C). A fast run on A hung the FX3 the same way. Five such
+   hangs since 2026-11-13: four behind the hub, and one (A, 2026-11-18) with
+   the bladeRF on its own port, after which the FX3 came back from a port
+   reset with corrupted descriptors (upstream draft 7e). The cause is open
+   (section 14); an FX3 lockup with a known trigger and fix is item 10.
    The harness's own run of the test
    (`ctrl_threads-fpga`, with the TX cap and a 5-minute limit) cannot pass:
    the cap clamps the gain thread's TX gains, and the test needs about 10
@@ -1216,6 +1218,35 @@ here.
    3.5 dB weaker than RX2 at 5.8 GHz (section 13; this board). The start of
    every transmission brings up to ~0.7 s of short, weak, off-frequency
    bursts (section 13; cause not investigated).
+10. An FX3 lockup with a known trigger and a fix (2026-11-18, the xA9 on a
+    MacBook Air, receive only; not yet a section here, see upstream draft
+    15). A two-channel receive started in FPGA tuning mode in bladeRF-cli's
+    order makes Nuand's libbladeRF reset the receive endpoint while the
+    stream's transfers are queued. FX3 firmware 2.6.0 then locked up in 4
+    of 14 runs, on every FPGA image. Branch `fx3-epnak` (8d886dbc: NAK the
+    endpoint around the reset, as the FX3 SDK's examples do) locked up in 0
+    of 40, and a 10-minute soak of normal use with it passed. Results,
+    images and tools: `results/xA9-mba/` on the XPS.
+11. To investigate: the FX3 firmware built with the FX3 SDK 1.3.5
+    libraries. Nuand's 2.6.0 links the SDK's 1.3.3 libraries: it rebuilds
+    byte for byte from the 1.3.5 SDK package with `FX3_SDK_VERSION` "1.3.3"
+    in `fx3_firmware/cmake/fx3-toolchain.cmake` (upstream draft 15). With
+    "1.3.5", with or without item 10's fix, the firmware stops answering
+    FPGA requests after a flash write until the FX3 reboots: libbladeRF's
+    next open times out in `get_fpga_version()`. Seen twice on the xA9
+    (2026-11-18 14:56 and 16:25, each right after `bladeRF-cli -f` wrote the
+    FX3 firmware area). After a flash read it answers, and so does the 1.3.3
+    build after a write. A lead: 1.3.5 changed `CyU3PSpiTransmitWords()`,
+    which flash writes use (a data-corruption fix, and
+    `CyU3PSpiSetTxFlushWaitPeriod()` added). To reproduce: run a
+    1.3.5-library build (`fx3-epnak` at de2d1071, or 09c82087 with "1.3.5";
+    images in `results/xA9-mba/fx3/`), write a flash region, then open the
+    device without `BLADERF_FORCE_NO_FPGA_PRESENT`. Testing writes a board's
+    flash, so ask first. `fx3-epnak` reverts the switch (adcb5210), so the
+    fork stays on the 1.3.3 libraries for now. The SDK packages, their
+    release notes as text and the library-matching tool are in
+    `~/workarea/fx3-sdk/` and `~/workarea/builds/scripts/fx3libmatch.py` on
+    the XPS.
 
 ## How to repeat
 
