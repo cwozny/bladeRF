@@ -9,11 +9,13 @@ results.
 ## Safety rules
 
 * The harness **never writes the bladeRF's SPI flash**. FPGA images are only
-  loaded into the FPGA (volatile), so as long as the flash holds no FPGA
-  autoload image (inventory.sh shows the FPGA unconfigured after power-up), a
-  power cycle always returns the board to a clean state. The xA5 image fits
-  in a 64 Mbit flash, so do not set up FPGA autoload (`bladeRF-cli -L`) on the
-  test board.
+  loaded into the FPGA (volatile), so a power cycle always returns the board
+  to its own state: an unconfigured FPGA if the flash holds no FPGA autoload
+  image (the xA5 of TESTING.md), or else the flash's autoload image (the xA9
+  rev 1.3 of TESTING.md came with Nuand's official v0.16.0 hostedxA9.rbf
+  there; bladeRF-cli's version then says "configured from SPI flash").
+  inventory.sh shows which. Do not set up or change FPGA autoload
+  (`bladeRF-cli -L`) on a test board.
 * All bladeRF-cli use goes through `bin/bladerf-cli-safe`, which refuses
   flash-writing commands and options (`flash_image`, `flash_restore`,
   `flash_init_cal`, `erase`, `jump_to_boot`, `load fx3`, `-f`, `-L`, ...)

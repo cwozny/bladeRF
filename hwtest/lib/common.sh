@@ -27,8 +27,14 @@ B200MINI_USB_ID="2500:0021"
 # libbladeRF loads hostedxA5.rbf (xA9: hostedxA9.rbf) from its search path
 # whenever the FPGA is unconfigured (e.g. after a power cycle or FX3 reset).
 # BLADERF_SEARCH_DIR is searched first: point it at the official image so the
-# board always comes back known-good.
-export BLADERF_SEARCH_DIR="$HWTEST_HOME/autoload"
+# board always comes back known-good. HWTEST_NO_AUTOLOAD=1 (inventory.sh) points
+# it at an empty directory instead, for every script that sources this file
+# (bladerf-cli-safe too), so that opening the device loads nothing.
+if [ "${HWTEST_NO_AUTOLOAD:-0}" = 1 ]; then
+    export BLADERF_SEARCH_DIR="$HWTEST_HOME/empty-search-dir"
+else
+    export BLADERF_SEARCH_DIR="$HWTEST_HOME/autoload"
+fi
 
 BLADERF_CLI_BIN="$HOST_BUILD/output/bladeRF-cli"
 export LD_LIBRARY_PATH="$HOST_BUILD/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -127,6 +133,8 @@ check_image_variant() {     # check_image_variant <image.rbf>
 # Also (re)create the autoload link to the official image.
 check_search_path() {
     local d f bad=0
+    [ "${HWTEST_NO_AUTOLOAD:-0}" = 1 ] &&
+        die "HWTEST_NO_AUTOLOAD=1 is for inventory.sh only (it would link the official image into the empty search directory)"
     for d in "$BLADERF_SEARCH_DIR" "$HOST_BUILD/output" "$PWD" \
              "$HOME/.config/Nuand/bladeRF" "$HOME/.Nuand/bladeRF" \
              "$HWTEST_HOME/prefix/etc/Nuand/bladeRF" "$HWTEST_HOME/prefix/share/Nuand/bladeRF" \
