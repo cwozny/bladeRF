@@ -16,7 +16,7 @@ The control interface uses the built in UART to communicate with the FPGA.  Mess
 ## Building ##
 Building the FX3 firmware first requires the download of the [Cypress FX3 SDK][cypress_sdk]. This is free (monetarily) and may require registration on the Cypress website. The FX3 uses ThreadX as an RTOS for the ARM9 which is distributed with their SDK and linked to from our software.
 
-**This firmware build requires FX3 SDK version 1.3.3 or later**
+**This firmware build requires FX3 SDK version 1.3.5** (it links the SDK's 1.3.5 firmware libraries; up to release 2.6.0 the firmware was linked against the 1.3.3 libraries, which the 1.3.5 SDK also ships)
 
 [cypress_sdk]: http://www.cypress.com/?rID=57990 (Cypress FX3 SDK) (downloaded file is `ezusbfx3sdk_1.3.5_Linux_x32-x64.tar.gz`)
 

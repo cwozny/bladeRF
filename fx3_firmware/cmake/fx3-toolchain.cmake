@@ -1,5 +1,5 @@
 ################################################################################
-# Configure CMake and setup variables for the Cypress FX3 SDK v1.3.3
+# Configure CMake and setup variables for the Cypress FX3 SDK v1.3.5
 #
 # Inputs:
 #   FX3_INSTALL_PATH    Path to Cypress FX3 SDK Installation.
@@ -14,7 +14,7 @@ cmake_minimum_required(VERSION 3.5)
 # FX3 SDK paths and files
 ################################################################################
 
-set(FX3_SDK_VERSION         "1.3.3")
+set(FX3_SDK_VERSION         "1.3.5")
 set(ARM_TOOLCHAIN_VERSION   "2013.11")
 set(GCC_VERSION             "4.8.1")
 
