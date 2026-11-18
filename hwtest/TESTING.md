@@ -943,6 +943,72 @@ is printed after the four threads have joined: test_threads stops the RX
 stream first, and with the firmware loopback the TX stream then stalls.
 test_threads does not count it.
 
+### 15. A second board: the xA5's baseline (2026-11-17)
+
+To see whether the results depend on the board, the same plan runs on this
+xA5 and on an xA9 (`plans/unit-xA5-20261117.txt`, `unit-xA9-20261118.txt`):
+smoke, host, fpga, formats, oc, trigger, sched and bist on A, B and C, then
+deep, fullsoak and soak on A and C. The bladeRF on its own USB-C port (2-3),
+the B200mini off USB, the last cabling row, `HWTEST_TX=1`, libbladeRF and
+tests of `host-fixes` (eab40910) with `HWTEST_FIXES=1`; the tests that need
+the B200mini (fmt_txrf, oc_pulse) and ctrl_threads-fpga left out (results
+`results/xA5-*-u1*/`, 12:59 to 23:16):
+
+| Run | A | B | C |
+|---|---|---|---|
+| smoke to bist | 134/148 | 135/148 | 133/148 |
+| deep | 6/6 | | 6/6 |
+| fullsoak | 4/4 | | 4/4 |
+| soak, 90 minutes | 632/632 | | 667/667 |
+
+Every failure is one seen before, or gave no result:
+
+| Failure | A | B | C |
+|---|---|---|---|
+| fmt_txrf, two channels, FPGA tuning mode, five formats: no result (the plan did not leave them out, and they need the B200mini: "No devices found"; the xA9's plan leaves them out) | 5 | 5 | 5 |
+| fmt_loop, SC16, two channels, 4 Msps, both tuning modes (the loopback's limit, section 7) | 2 | 2 | 2 |
+| bist overclocked: 76.8 Msps on RX1 and RX2, 122.88 Msps on RX1 (section 8) | 3 | 3 | 3 |
+| sched: SC16 meta with one and two channels, SC8 meta with two (below) | 3 | 3 | 3 |
+| oc_rx, SC8 meta at 122.88 Msps, both tuning modes (sections 7 and 9) | | | 2 |
+| rx_meta, two channels, host tuning mode: "Requested timestamp is in the past" (the case of open item 1, 16 ms of slack) | 1 | | |
+
+New in this run: the formats phase with two channels in FPGA tuning mode
+(with `HWTEST_FIXES=1` only, as that needs 53632d98). Full-rate receive in
+all five formats and the SC8 loopback pass on A, B and C; the SC16 loopback
+fails as in host tuning mode.
+
+**sched**, the first time in a campaign (60 s per case, every burst written
+to a file in the results directory):
+
+| Case (the buffers last) | A: bad / bursts | B | C |
+|---|---|---|---|
+| SC16 meta, one channel, 61.44 Msps (59.7 ms) | 1 / 462 | 4 / 459 | 8 / 462 |
+| SC8 meta, one channel, 61.44 Msps (119.5 ms) | 0 / 482 | 0 / 483 | 0 / 482 |
+| SC16 meta, two channels, 30.72 Msps (59.7 ms) | 5 / 461 | 2 / 454 | 4 / 458 |
+| SC8 meta, two channels, 61.44 Msps (59.7 ms) | 4 / 408 | 3 / 409 | 3 / 409 |
+
+Each bad burst was either the first of the one-channel SC16 run, on every
+image (an overrun at the stream's start, open item 6), or scheduled too late
+after a pause between reads longer than the buffers last (section 10: the
+disk). In the SC8 one-channel case the longest pause was 78 ms, within its
+119.5 ms.
+
+**deep, fullsoak, soak:**
+
+- deep (FPGA tuning mode): A frequency 487 s, bandwidth 314 s, sample rate
+  3,975 s; C 405, 275 and 3,785 s. Frequency and bandwidth as in section 3;
+  the sample-rate sweep took 15 % (A) and 19 % (C) longer than there, on
+  both images alike. The libbladeRF build, the USB port and what the RF ports
+  saw (antennas then) all differ from section 3; not investigated.
+- fullsoak: receive, SC16 at 61.44 Msps for 60 minutes: A 221,183,459,328
+  and C 221,184,507,904 samples, none missing, duplicated or late. Loopback,
+  SC16 set to 30.72 Msps, 30 minutes: A 73,721,479,168 and C 73,722,593,280
+  samples back, 0 errors. A's loopback stall of section 7 did not come back
+  (on A one stall in three 30-minute runs, on C none in three).
+- soak (both tuning modes): A 63 rounds, C 66 to 67, no failure; C again
+  faster on Nios-bound tests (ctrl_frequency in FPGA tuning mode 9 s per run
+  against 11 s).
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
