@@ -37,8 +37,9 @@ FX3 firmware v2.6.0 (not changed). Images are only loaded into the FPGA
 every command that could write it).
 
 **Host:** Dell XPS 13 9310, Linux Mint 22.3 (Ubuntu 24.04 base), USB 3
-SuperSpeed. Until 2026-11-13 09:55 the bladeRF was on a USB-C port of the
-laptop; after that it was behind the VIA hub of a USB-C adapter (port 2-1.3).
+SuperSpeed. Until 2026-11-13 10:13 (its first enumeration behind the hub in
+the kernel log) the bladeRF was on a USB-C port of the laptop (2-3); after
+that it was behind the VIA hub of a USB-C adapter (port 2-1.3).
 Timings from before and after that change do not compare. On 2026-11-16 at
 22:07 it moved to the laptop's other USB-C port (2-3), and the B200mini,
 which had that port, went off USB (section 14).
@@ -998,8 +999,9 @@ disk). In the SC8 one-channel case the longest pause was 78 ms, within its
 - deep (FPGA tuning mode): A frequency 487 s, bandwidth 314 s, sample rate
   3,975 s; C 405, 275 and 3,785 s. Frequency and bandwidth as in section 3;
   the sample-rate sweep took 15 % (A) and 19 % (C) longer than there, on
-  both images alike. The libbladeRF build, the USB port and what the RF ports
-  saw (antennas then) all differ from section 3; not investigated.
+  both images alike. The libbladeRF build and what the RF ports saw
+  (antennas then) differ from section 3 (the USB port is the same, 2-3);
+  not investigated.
 - fullsoak: receive, SC16 at 61.44 Msps for 60 minutes: A 221,183,459,328
   and C 221,184,507,904 samples, none missing, duplicated or late. Loopback,
   SC16 set to 30.72 Msps, 30 minutes: A 73,721,479,168 and C 73,722,593,280
