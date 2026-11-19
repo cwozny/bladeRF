@@ -5,7 +5,7 @@
  *
  *   hwtest-stream probe    -f FMT [-l x1|x2] [-m MUX] [-r RATE]
  *   hwtest-stream rxcheck  -f FMT [-l x1|x2] [-r RATE] [-t SECONDS] [-W WARMUP_S]
- *   hwtest-stream loopback -f FMT [-l x1|x2] [-r RATE] [-t SECONDS]
+ *   hwtest-stream loopback -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS] [-A] [-O]
  *   hwtest-stream rxcap    -f FMT [-c CH] [-r RATE] -n SAMPLES -o FILE
  *                          [-F FREQ] [-g GAIN] [-O]
  *   hwtest-stream tx       -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
@@ -34,12 +34,19 @@
  *           (BLADERF_RX_MUX_DIGITAL_LOOPBACK) and checks every sample
  *           (SC16 and SC8 only: libbladeRF's asynchronous interface, see
  *           do_loopback). The DACs also get the samples, at the TX gain set
- *           (default 0 dB).
+ *           (default 0 dB). With -A the samples loop back in the AD9361
+ *           instead (BLADERF_LB_RFIC_BIST: its TX data port feeds its RX data
+ *           port; host tuning mode only), so they cross the FPGA-AD9361 LVDS
+ *           interface both ways: a check of the TX side of that interface.
+ *           TX and RX stream at once, so the rate is also bounded by what
+ *           the FX3 and USB carry both ways.
  * rxcap     receives SAMPLES samples into memory, then writes them to FILE
  *           (raw interleaved I/Q, int16 or int8): no file I/O while streaming.
  * tx        transmits FILE (raw interleaved I/Q in the format's sample type,
  *           one channel; duplicated for x2), repeated, or a generated tone
- *           TONE_HZ from the carrier at half scale, for SECONDS.
+ *           TONE_HZ from the carrier at half scale, for SECONDS, and prints
+ *           the rate at which libbladeRF took the samples (below the sample
+ *           rate: the host, USB or FX3 did not keep up and the DAC ran dry).
  * trigger   with one bladeRF as trigger master (J51-1): arms the RX trigger,
  *           checks that no samples flow while it is armed, fires it, and
  *           checks that samples then flow and the trigger reports fired.
@@ -80,6 +87,10 @@
  *
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
+ * -R ADDR=VAL sets an AD9361 register once the sample rate is set (libbladeRF
+ * rewrites its oversample registers on each rate change), e.g. -R 0x006=0x50
+ * for the RX DATA_CLK and data delays; -D prints the AD9361's clock, filter,
+ * data port, BBPLL and BIST registers at that point.
  * -F sets the carrier of the channels used, -g their gain (RX: manual gain).
  * The tuning mode comes from BLADERF_DEFAULT_TUNING_MODE, as for libbladeRF.
  * Exit status: 0 if every check passed, 1 if a check failed, 2 on errors.
@@ -110,6 +121,11 @@ struct opts {
     const char *mode, *sub, *dev, *in, *out, *fmt_name, *mux_name;
     bladerf_format fmt;
     bool x2, oversample, have_freq, have_gain, have_tone, bist_tone;
+    bool lb_rfic;                      /* loopback -A: in the AD9361 */
+    unsigned npoke;                    /* -R ADDR=VAL: AD9361 registers set after setup */
+    uint16_t poke_addr[8];
+    uint8_t poke_val[8];
+    bool dump_rfic;                    /* -D: print AD9361 registers after setup */
     int ch;                     /* 0 or 1 (x1 only) */
     double rate, seconds, freq, gain, tone, warmup;
     double burst_ms, lead_ms, gap_ms;  /* rxsched */
@@ -262,6 +278,34 @@ static int setup_channels(struct bladerf *dev, const struct opts *o, bool rx,
             /* the harness's TX cap (lib/tx-cap.c) still applies on enable */
             CHECK(bladerf_set_gain(dev, ch, (bladerf_gain)(o->have_gain ? o->gain : 0)));
         }
+    }
+    /* -R: after the sample rate (libbladeRF rewrites its oversample registers
+     * on every rate change), e.g. 0x006 (RX DATA_CLK and data delays) */
+    for (k = 0; k < (int)o->npoke; k++) {
+        uint8_t before = 0, after = 0;
+        CHECK(bladerf_get_rfic_register(dev, o->poke_addr[k], &before));
+        CHECK(bladerf_set_rfic_register(dev, o->poke_addr[k], o->poke_val[k]));
+        CHECK(bladerf_get_rfic_register(dev, o->poke_addr[k], &after));
+        printf("AD9361 register 0x%03x: 0x%02x -> 0x%02x (reads back 0x%02x)\n",
+               o->poke_addr[k], before, o->poke_val[k], after);
+    }
+    if (o->dump_rfic) {
+        /* the clock chain, filter and data port setup, BBPLL and BIST */
+        static const uint16_t from[] = { 0x000, 0x03f, 0x3f4 };
+        static const uint16_t to[]   = { 0x01f, 0x05f, 0x3f6 };
+        unsigned r;
+        uint16_t a;
+        for (r = 0; r < sizeof(from) / sizeof(from[0]); r++) {
+            for (a = from[r]; a <= to[r]; a++) {
+                uint8_t v = 0;
+                if ((a - from[r]) % 16 == 0) {
+                    printf("%sAD9361 0x%03x:", a == from[r] && r == 0 ? "" : "\n", a);
+                }
+                CHECK(bladerf_get_rfic_register(dev, a, &v));
+                printf(" %02x", v);
+            }
+        }
+        printf("\n");
     }
     return 0;
 }
@@ -913,21 +957,35 @@ static int do_loopback(struct bladerf *dev, struct opts *o)
                               n, NUM_TRANSFERS, &tx));
     CHECK(bladerf_set_stream_timeout(dev, BLADERF_RX, TIMEOUT_MS));
     CHECK(bladerf_set_stream_timeout(dev, BLADERF_TX, TIMEOUT_MS));
-    CHECK(bladerf_set_loopback(dev, BLADERF_LB_NONE));
-    CHECK(bladerf_set_rx_mux(dev, BLADERF_RX_MUX_DIGITAL_LOOPBACK));
-    printf("loopback: %s, %s, %.3f Msps, %.0f s\n", o->fmt_name,
-           o->x2 ? "x2" : "x1", o->rate / 1e6, o->seconds);
+    if (o->lb_rfic) {
+        CHECK(bladerf_set_rx_mux(dev, BLADERF_RX_MUX_BASEBAND));
+        CHECK(bladerf_set_loopback(dev, BLADERF_LB_RFIC_BIST));
+    } else {
+        CHECK(bladerf_set_loopback(dev, BLADERF_LB_NONE));
+        CHECK(bladerf_set_rx_mux(dev, BLADERF_RX_MUX_DIGITAL_LOOPBACK));
+    }
+    printf("loopback: %s, %s, %.3f Msps, %.0f s, %s\n", o->fmt_name,
+           o->x2 ? "x2" : "x1", o->rate / 1e6, o->seconds,
+           o->lb_rfic ? "in the AD9361 (BLADERF_LB_RFIC_BIST)"
+                      : "in the FPGA (BLADERF_RX_MUX_DIGITAL_LOOPBACK)");
     tt.stream = txs;
     tt.layout = layout(o, BLADERF_TX);
     rt.stream = rxs;
     rt.layout = layout(o, BLADERF_RX);
     if (enable_channels(dev, o, BLADERF_TX, true) != 0) {
+        if (o->lb_rfic) {
+            bladerf_set_loopback(dev, BLADERF_LB_NONE);
+        }
         return 2;
     }
     pthread_create(&tth, NULL, lb_stream_thread, &tt);
     if (enable_channels(dev, o, BLADERF_RX, true) != 0) {
         tx.stop = true;
         pthread_join(tth, NULL);
+        enable_channels(dev, o, BLADERF_TX, false);
+        if (o->lb_rfic) {
+            bladerf_set_loopback(dev, BLADERF_LB_NONE);
+        }
         return 2;
     }
     pthread_create(&rth, NULL, lb_stream_thread, &rt);
@@ -942,6 +1000,9 @@ static int do_loopback(struct bladerf *dev, struct opts *o)
     enable_channels(dev, o, BLADERF_RX, false);
     enable_channels(dev, o, BLADERF_TX, false);
     bladerf_set_rx_mux(dev, BLADERF_RX_MUX_BASEBAND);
+    if (o->lb_rfic) {
+        bladerf_set_loopback(dev, BLADERF_LB_NONE);
+    }
     bladerf_deinit_stream(rxs);
     bladerf_deinit_stream(txs);
     printf("TX: %" PRIu64 " samples per channel sent (stream status %d), "
@@ -1033,7 +1094,7 @@ static int do_tx(struct bladerf *dev, struct opts *o)
     uint64_t len = 0, j, sent = 0;
     void *one = NULL, *buf;
     struct bladerf_metadata md;
-    double t0;
+    double t0, tl;
     bool first = true;
     int status = 0;
 
@@ -1120,6 +1181,7 @@ static int do_tx(struct bladerf *dev, struct opts *o)
         first = false;
         sent += n;
     }
+    tl = now() - t0;
     if (is_meta(o->fmt)) {
         memset(buf, 0, (size_t)n * sb);
         memset(&md, 0, sizeof(md));
@@ -1130,6 +1192,10 @@ static int do_tx(struct bladerf *dev, struct opts *o)
     usleep(200000);
     enable_channels(dev, o, BLADERF_TX, false);
     printf("tx: %" PRIu64 " samples sent in %.2f s\n", sent, now() - t0);
+    /* samples per channel; the first ones only fill libbladeRF's buffers */
+    printf("tx: libbladeRF took %.3f Msps per channel while sending (%.1f %% of %.3f)\n",
+           (o->x2 ? sent / 2.0 : (double)sent) / tl / 1e6,
+           100 * (o->x2 ? sent / 2.0 : (double)sent) / tl / o->rate, o->rate / 1e6);
     free(buf);
     free(one);
     if (status != 0) {
@@ -2067,7 +2133,8 @@ static void usage(void)
             "  -r RATE  -t SECONDS  -n SAMPLES  -m MUX  -F FREQ  -g GAIN  -O\n"
             "  -o FILE  -i FILE  -T TONE_HZ  -W WARMUP_S  -B prbs|tone  -d DEVICE\n"
             "  -b BURST_MS  -L LEAD_MS | -N  -G GAP_MS  -S NBUF,SAMPLES,NXFER (rxsched)\n"
-            "  -v (verbose)\n");
+            "  -A (loopback in the AD9361)  -R ADDR=VAL (set an AD9361 register after\n"
+            "  setup, up to 8)  -D (print AD9361 registers after setup)  -v (verbose)\n");
 }
 
 int main(int argc, char **argv)
@@ -2090,7 +2157,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:AR:D")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -2124,6 +2191,26 @@ int main(int argc, char **argv)
             case 'L': o.lead_ms = atof(optarg); break;
             case 'G': o.gap_ms = atof(optarg); break;
             case 'N': o.rx_now = true; break;
+            case 'A': o.lb_rfic = true; break;
+            case 'D': o.dump_rfic = true; break;
+            case 'R': {
+                char *eq = strchr(optarg, '='), *end1 = NULL, *end2 = NULL;
+                unsigned long a, v;
+                if (eq == NULL || o.npoke >= 8) {
+                    usage();
+                    return 2;
+                }
+                a = strtoul(optarg, &end1, 0);
+                v = strtoul(eq + 1, &end2, 0);
+                if (end1 != eq || *end2 != '\0' || a > 0x3ff || v > 0xff) {
+                    usage();
+                    return 2;
+                }
+                o.poke_addr[o.npoke] = (uint16_t)a;
+                o.poke_val[o.npoke] = (uint8_t)v;
+                o.npoke++;
+                break;
+            }
             case 'S':
                 if (sscanf(optarg, "%u,%u,%u", &o.nbuf, &o.bufsamp, &o.nxfer) != 3 ||
                     o.nbuf == 0 || o.bufsamp == 0 || o.bufsamp % 1024 != 0 ||
