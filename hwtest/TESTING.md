@@ -1011,6 +1011,85 @@ disk). In the SC8 one-channel case the longest pause was 78 ms, within its
   faster on Nios-bound tests (ctrl_frequency in FPGA tuning mode 9 s per run
   against 11 s).
 
+### 16. The xA9: the same plan on a second board (2026-11-18/19)
+
+An xA9 (rev 1.3, 301 KLE, a 128 Mbit flash with the official v0.16.0 as its
+autoload image, FX3 firmware 2.6.0) ran section 15's plan with the xA9
+builds of the same images (`plans/unit-xA9-20261118.txt`, `images-xA9/` and
+its MANIFEST.txt, `HWTEST_FPGA=A9`), on the same USB-C port (2-3), with the
+same cabling, host build and `HWTEST_TX=1`. The plan also leaves out the
+five fmt_txrf runs the xA5 could not run without the B200mini. First a
+read-only inventory (`results/inventory-20261118-183727/`): the whole flash
+was byte-identical to the backup made on the MacBook Air at 11:10 the same
+day (open item 10). Results `results/xA9-*-u1*/`, 18:45 to 04:39:
+
+| Run | A | B | C |
+|---|---|---|---|
+| smoke to bist | 138/143 | 136/143 | 140/143 |
+| deep | 6/6 | | 6/6 |
+| fullsoak | 4/4 | | 4/4 |
+| soak, 90 minutes | 637/637 | | 672/672 |
+
+The xA5's smoke-to-bist runs without those five results: A 134/143, B
+135/143, C 133/143. Every failure on the xA9 is one seen before, and C
+failed only tests A failed too:
+
+| Failure | A | B | C | xA5: A, B, C |
+|---|---|---|---|---|
+| fmt_loop, SC16, two channels, 4 Msps, both tuning modes (the loopback's limit, section 7) | 2 | 2 | 2 | 2, 2, 2 |
+| bist overclocked, 122.88 Msps on RX1 (section 8) | 1 | 1 | 1 | 1, 1, 1 |
+| sched: bursts scheduled too late after a long pause between reads (section 10), or the first burst overrunning (open item 6) | 1 | 3 | | 3, 3, 3 |
+| rx_meta, 8-bit, an overrun: one channel (A, open item 6), two channels (B, open item 1) | 1 | 1 | | |
+| rx_meta, 16-bit, two channels: "Requested timestamp is in the past" (open item 1) | | | | 1, 0, 0 |
+| bist overclocked, 76.8 Msps on RX1 and RX2 (below) | | | | 2, 2, 2 |
+| oc_rx, SC8 meta at 122.88 Msps, both tuning modes (sections 7 and 9) | | | | 0, 0, 2 |
+
+**The one difference: overclocked receive at 76.8 Msps.** The AD9361's PRBS
+over the LVDS interface at 307.2 MHz (section 8), 20 s per channel; bad
+samples of 1,552,777,216:
+
+| | A | B | C |
+|---|---|---|---|
+| xA9, RX1 / RX2 | 0 / 0 | 0 / 0 | 0 / 0 |
+| xA5, RX1 / RX2 | 78 / no pattern | 95 / 41.4 M (2.7 %) | 101 / no pattern |
+
+On the xA5 every bad sample had the same bit wrong (bit 3 of SC8, bit 7 of
+the 12-bit sample), as in section 8: one data lane fails first there, with
+every image. The xA9 has no bad sample with any image. Its builds close
+timing with at least 0.52 ns of setup slack on every path (MANIFEST.txt),
+the xA5's with −0.154 ns (A) and −0.110 ns (C) on the LVDS capture (section
+2), but its FPGA is another device (301 KLE against 77), so this does not
+tell the board from the FPGA. 76.8 Msps is beyond the AD9361's 61.44 Msps
+either way, and at 122.88 Msps neither board receives anything usable.
+
+**deep, fullsoak, soak:**
+
+- deep (FPGA tuning mode): A frequency 487 s, bandwidth 317 s, sample rate
+  3,336 s; C 403, 281 and 3,017 s. Frequency and bandwidth as on the xA5;
+  the sample-rate sweep took 16 % (A) and 20 % (C) less time than on the
+  xA5 in section 15, and 3 to 5 % less than on the xA5 in section 3. So the
+  xA5's slower sweep in section 15 is not the build's or the cabling's
+  alone; not investigated.
+- fullsoak: receive, SC16 at 61.44 Msps for 60 minutes: A 221,183,688,704
+  and C 221,183,934,464 samples, none missing, duplicated or late. Loopback,
+  SC16, 30 minutes: A 73,723,707,392 and C 73,720,922,112 samples back, 0
+  errors.
+- soak (both tuning modes): A 63 to 64 rounds, C 67, no failure;
+  ctrl_frequency in FPGA tuning mode 9 s per run on C against 11 s on A, as
+  on the xA5.
+
+**After the campaign: the FX3 lockup on Linux.** Open item 10's reproducer
+(a two-channel receive started in FPGA tuning mode in bladeRF-cli's order),
+receive only, with libbladeRF from Nuand's master (`host-build`, 35174c30)
+and the official image: the FX3 locked up on the 6th run (04:39), the same
+way as on the MacBook Air. Enabling RX2 made libbladeRF send RF_RX(0) under
+the running RX1 stream; that request timed out, and from then on GET_STATUS
+and every descriptor read timed out, with the board still enumerated
+(`results/repro-linux-20261119-043858/`, `hang-evidence.txt`). So the
+lockup does not depend on the host. On Linux every open resets the USB port
+("USB port reset succeeded"), and the board came back from each of those
+resets until the lockup.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -1028,7 +1107,10 @@ disk). In the SC8 one-channel case the longest pause was 78 ms, within its
   transmit soaks (sections 3, 5).
 - Image B: the restructured Qsys script still builds Nuand's Nios II design,
   with the same fit and timing as A, and passes the same tests.
-- Only one board (xA5) was tested on hardware; xA4 and xA9 were built only.
+- Tested on hardware on two boards: the xA5 (sections 3 to 15) and an xA9
+  rev 1.3 (section 16: smoke to bist on A, B and C, deep, fullsoak and
+  soak on A and C; C failed only tests A failed too). The xA4 was built
+  only.
 
 #### 09fcd3eb (tested as 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
 
@@ -1225,10 +1307,11 @@ here.
     15). A two-channel receive started in FPGA tuning mode in bladeRF-cli's
     order makes Nuand's libbladeRF reset the receive endpoint while the
     stream's transfers are queued. FX3 firmware 2.6.0 then locked up in 4
-    of 14 runs, on every FPGA image. Branch `fx3-epnak` (8d886dbc: NAK the
-    endpoint around the reset, as the FX3 SDK's examples do) locked up in 0
-    of 40, and a 10-minute soak of normal use with it passed. Results,
-    images and tools: `results/xA9-mba/` on the XPS.
+    of 14 runs, on every FPGA image, and on Linux on the 6th run (the XPS,
+    section 16). Branch `fx3-epnak` (8d886dbc: NAK the endpoint around the
+    reset, as the FX3 SDK's examples do) locked up in 0 of 40 on the MacBook
+    Air, and a 10-minute soak of normal use with it passed; not yet run on
+    Linux. Results, images and tools: `results/xA9-mba/` on the XPS.
 11. To investigate: the FX3 firmware built with the FX3 SDK 1.3.5
     libraries. Nuand's 2.6.0 links the SDK's 1.3.3 libraries: it rebuilds
     byte for byte from the 1.3.5 SDK package with `FX3_SDK_VERSION` "1.3.3"
