@@ -646,6 +646,7 @@ adsb) and 3cb48e29 (foxhunt), with Nuand's code (master 35174c30) built with
   AD9361 RX LVDS capture path again (section 2); Nuand's foxhunt xA5 (the
   bench build below) misses it by 0.112 ns.
 - wlan and adsb were built only (no ADS-B or Wi-Fi signals on the bench).
+  On 2026-11-19 both ran on the xA9 through the AD9361's loopback (section 17).
 
 ### 12. foxhunt on the bench: Nios II against Nios V (2026-11-14)
 
@@ -1088,7 +1089,269 @@ and every descriptor read timed out, with the board still enumerated
 (`results/repro-linux-20261119-043858/`, `hang-evidence.txt`). So the
 lockup does not depend on the host. On Linux every open resets the USB port
 ("USB port reset succeeded"), and the board came back from each of those
-resets until the lockup.
+resets until the lockup. After the replug (06:27) the whole flash was
+byte-identical to the 18:37 inventory (`inventory-20261119-062733`).
+
+### 17. The xA9 the next day: the FX3 fix on Linux, how fast it samples, the other revisions (2026-11-19)
+
+The xA9 on the same port and cabling (the last cabling row: TX1 through
+40 dB to the B200mini, which stayed off USB; the other ports on loads).
+
+**The FX3 endpoint-NAK fix on Linux** (`results/nak-linux-20261119-0628*`;
+the user approved writing the test firmware and restoring the official one).
+The 2.6.0 + NAK image tested on the MacBook Air (fork `fx3-epnak`, 8d886dbc,
+SDK 1.3.3 libraries, md5 1a179190…, version 2.6.0-epnak-8d886dbc) was written
+to the flash's firmware area with `bladeRF-cli -f` (3 erase blocks, 484 pages,
+read back and compared), the FX3 rebooted from the flash
+(`bladerf_device_reset`) and the FPGA autoloaded as usual. Then:
+
+- the lockup trigger (open item 10), receive only, Nuand's libbladeRF, FPGA
+  tuning mode: 60 bladeRF-cli runs (20 each with A, C and B) and 20 bad-order
+  runs of `rx2order` after 3 good-order ones: no lockup in 80 starts (the
+  official 2.6.0 locked up on the 6th the night before). Every stream still
+  stopped after at most one buffer: that is libbladeRF's part (open item 10,
+  fixed on `host-fixes` by 53632d98).
+- normal use: section 16's run 1 again (A, smoke to bist): 143 tests, 5
+  failed, the three that fail everywhere (fmt_loop SC16 x2 4M in both modes,
+  bist_oc 122.88 Msps) and two known noise cases (rx_meta_8bit_mimo-host, an
+  overrun; rx_meta_mimo-fpga, "Requested timestamp is in the past", also seen
+  with the official firmware on 11-13 and 11-17).
+- the official 2.6.0 written back and the FX3 rebooted: the whole flash
+  byte-identical to the 18:37 inventory (07:10).
+
+**How fast the xA9 samples, receiving and transmitting**
+(`results/ratesweep-20261119-071039`). Overclocked
+(`BLADERF_FEATURE_OVERSAMPLE`, SC8), host tuning mode. libbladeRF sets the
+AD9361 up for half the rate and then doubles its output (register 0x003 =
+0xD4: both RX channels on, RHB3 and RHB1 decimating by 2, RHB2 and the FIR
+off; 0x002 = 0xC0). Both RX channels stay on, so the interface runs 2R2T and
+its DATA_CLK is four times the sample rate (0x010 = 0xC8: the 2R2T-timing bit
+is not set; the channel enables decide): the FPGA's counter, which runs at the
+FPGA's RX clock / 2 = DATA_CLK / 4, measured 122.877 Msps at 122.88
+(`results/ocexplore-*`, register dumps at 61.44, 76.8 and 122.88 Msps).
+
+- Receive, BIST check, 10 s per rate on RX1 and RX2: A and C clean to
+  108 Msps, B to 104. The first bad samples were always in bit 3 of SC8
+  (bit 7 of the 12-bit sample), the lane that fails first on the xA5 too; at
+  122.88 Msps 8 to 9 % of the samples were bad. 120 s per channel: A and C at
+  108 Msps, 1 bad sample in 1.3 × 10^10 on RX1 and none on RX2; B at
+  104 Msps none. (The xA5 is clean to 68 Msps, section 9.)
+- Transmit alone (`hwtest-stream tx`, SC8, a 1 MHz tone on TX1, TX gain
+  0 dB): libbladeRF took 100.7 to 101.4 % of the sample rate up to
+  122.88 Msps with A and C (the rest is the first buffers filling): host, USB
+  and FX3 keep the DAC fed. Nothing receives these samples, so this checks
+  throughput only.
+- Transmit with every sample checked (`hwtest-stream loopback -A`: numbered
+  samples out, through the AD9361's data-port loopback, back in and checked):
+  clean to 80 Msps on both channels with A and C; from 84 Msps single bits
+  flipped in fixed positions while the full rate still arrived, so the
+  transmit side of the interface fails there, not the throughput. In this
+  mode `ad9361_tx_quad_calib` reports "Unhandled case ... clkrf 40000000
+  clktf 80000000".
+- Why the boards differ: the same design and constraints, but the A9 die
+  gives the LVDS receiver's slow clock domain (`pll_sclk`) about 1 ns more
+  setup margin. In Nuand's own v0.16.0 builds (Quartus 23.1.1) that slack is
+  +0.076 ns (slow 85 °C) and −0.154 ns (slow 0 °C) on the xA5, +1.010 and
+  +1.092 ns on the xA9.
+
+**The RX interface delays** (`results/ocexplore-*`, `results/delayconfirm-*`).
+AD9361 register 0x006 holds the DATA_CLK delay (bits 7:4) and the data
+delay (bits 3:0); libbladeRF sets 0x50 (DATA_CLK 1.5 ns) and skips the
+AD9361's interface tuning. A BIST check of 1 s per setting, DATA_CLK delay 0
+to 15 and data delay 1 to 15, on RX1 and RX2:
+
+- 76.8 Msps: the default sits in the middle of a 4-setting window (the
+  windows repeat every 7 settings, one bit time).
+- 112 Msps: the default is at an edge (errors); 0x40, 0x05 and 0x06 are clean
+  on both channels.
+- 122.88 Msps: single-setting windows at 0x00, 0x40, 0x90, 0xd0, 0x09 and
+  0x0e on both channels, with A and with C.
+
+Then 60 s per channel at 122.88 Msps with A: 0x40, 0x00, 0x90, 0xd0 and 0x09
+gave 0 bad samples in 7.37 × 10^9 each, 0x0e 99,243 on RX2; 0x40 for 600 s
+per channel: 0 bad in 7.37 × 10^10 on each; with C, 60 s per channel, 0 bad.
+So on this board receiving at 122.88 Msps is bit-exact in the stock 2R2T mode
+with one register value (0x006 = 0x40 instead of 0x50). The xA5 has not been
+mapped.
+
+At 122.88 Msps with RX2 and TX2 off (0x003 = 0x54, 0x002 = 0x40) the FPGA's
+counter dropped to 61.44 Msps: in 1R1T the AD9361 halves DATA_CLK to
+245.76 MHz, where both boards are clean. The FPGA would need a 1R1T deframer
+(`axi_ad9361_dev_if_alt.v` decodes 2R2T only); that is separate work.
+
+**The other revisions with Nios V** (`results/revs-smoke-20261119-084339`,
+receive only). wlan built from master with Quartus 23.1.1 (Nios II) and from
+`niosv` (99f1b2d5) with 25.1 (Nios V), each: loaded, versions read,
+frequency, sample rate and bandwidth set and read back in FPGA and in host
+tuning mode, and an RX1 capture of 80,000,000 bytes of 80,000,000 in both
+modes, the same on both images. adsb built from `niosv` (Nios V): loaded,
+set and read back the same way; Nuand's `bladeRF_adsb` ran 30 s without an
+error (no messages: the RX ports are terminated). Nuand's published
+`fpga/v0.16.0/wlanxA9.rbf` (md5 fb1dc763…, the same as their .md5sum) is FPGA
+v0.15.3, which libbladeRF refuses with FX3 firmware 2.6.0 ("Firmware v2.6.0
+requires FPGA v0.16.0 or later").
+
+**Nuand's threads test on the xA9** (`results/ctrlthreads-nuand-xa9th-1119-0846`
+and `-1140`): `libbladeRF_test_ctrl -T fpga -t threads`, the full variant,
+with the all-fixes build (`host-build-threads-keep250`: `host-fixes`'
+libbladeRF and test fixes, Nuand's 250 ms Nios time-out), the bladeRF on its
+own port. A passed in 7,915 s and C in 7,387 s, each with a failure count of
+0. Both ended with the end-of-run TX time-out of section 14.
+
+**The endpoint-NAK fix rebased onto master** (`results/nak-master-20261119-105833`;
+the user approved writing the test firmware and restoring the official one).
+`fx3-epnak-master` (4c24c1c7, FX3 2.6.1 + the NAK change), built like the
+official image (version 2.6.1-epnak-4c24c1c7, md5 0e43774a…), written and
+tested as above: no lockup in 80 starts of the trigger (20 each with A, C and
+B, 20 bad-order `rx2order` runs); section 16's run 1 again: 143 tests and the
+same 5 failures as with the official firmware; the official 2.6.0 written
+back, and the whole flash byte-identical to the 18:37 inventory (11:40).
+
+**Each fix alone** (`results/split-20261119-142639`). Every `pr/*` branch
+(upstream master 35174c30 + one fix) exported with its submodules and
+hwtest's build-only BUILD_BLADERF_UPDATE option, built alone (0 compiler
+warnings each), and checked against master built the same way, with A unless
+the row says otherwise:
+
+| Fix | Check | master | the fix alone |
+|---|---|---|---|
+| P1 stale Nios replies | late-reply injector, `test_ctrl -T fpga -t bandwidth` | 19 failures | 0 |
+| P1 | full bandwidth sweep, FPGA tuning mode | 0 failures | 0 (A and C) |
+| P2 two-channel enable, FPGA tuning mode | `test_rx_meta -m`, `-b 8 -m`, both modes, A and C | not run (open item 10's trigger) | pass; one start-of-stream overrun (below) |
+| P3 MIMO layout, host tuning mode | RX1+RX2 receive while TX1 sends 0.2 s | 2,228,224 of 30,000,000 samples | 30,000,000; `test_rx_meta -m`, `-b 8 -m` pass |
+| P4 RFIC re-init after a load | `test_fpga_load`, host tuning mode | "Calibration TIMEOUT (0x16, 0x80)" | pass (A and C); FPGA mode passes before and after |
+| P7a gain-range lock | `test_ctrl -t gain -f`, both modes | pass | pass |
+| P7b gain sign | gain readback check, FPGA tuning mode | 5 of 14 wrong (-2147483648) | 0 of 14 (A and C; host mode 0 before and after) |
+| P7d gain check range | `test_ctrl -t gain -f`, both modes | pass | pass |
+| P16 flash page count | `flash_backup` of all 16 MiB in one call | stops: "usb.c:612: usb_read_flash_pages: Assertion `count == count_u32' failed" | identical to the two 8 MiB halves read with master (md5 9cc8724e…) |
+| P18 flash read error | `flash_backup` of the low 8 MiB | - | identical to master's |
+
+`test_scheduled_retune` (rx, Nuand's hop list, quick tune; every failure
+"Requested timestamp is in the past"), runs failed:
+
+| Build | host tuning mode | FPGA tuning mode |
+|---|---|---|
+| master | 10 of 10 (iteration 1) | 10 of 10 (iteration 1) |
+| P5a (tune first) | 26 of 30 (15 at iteration 3) | 24 of 30 (iterations 114-150) |
+| P5b (64 buffers) | 10 of 10 (iterations 1-4) | 0 of 10 |
+| P5a + P5b | 0 of 30 | 0 of 30 |
+
+P7c (test only) had no run of its own: alone it cannot pass the threads test,
+and the threads runs above include it.
+
+The P2 overrun: both FPGA-mode `-m` runs of the split check (A, then C)
+reported one "Overrun detected" after 9 of 15 reads, at the same sample
+(4,016 valid samples, then a jump to t = 0x10f7b); the stream went on and
+the test completed. Then, each right after a load of A: P2 alone 12 runs,
+the all-fixes build 12 runs (alternating order): no overrun
+(`results/recheck-*`, `recheck2-*`). The all-fixes build also had none in the
+5 campaign runs on the xA9. So 2 of 14 with P2 alone, 0 of 17 with all fixes:
+open item 1's overrun, not a stop of the stream (I2's failure).
+
+**A libbladeRF bug found on the way: a timed-out wait reads as an
+"unexpected error"** (`results/recheck2-*`). `posix_cond_timedwait()` in
+`host/common/include/thread.h` (5cdcd28e, 2023-12; in 2025.05 and later)
+returns -1 for a time-out, while its callers compare with THREAD_TIMEOUT
+(ETIMEDOUT). A test program (`lib/sync-timeout-check.c`, receive only:
+`bladerf_sync_rx()` for one 16384-sample buffer at 1 Msps with a 5 ms
+time-out) got -1 ("An unexpected error occurred") in 41 of 41 calls with
+master, -6 (BLADERF_ERR_TIMEOUT) in 41 of 41 with the one-line fix (local
+branch `pr/cond-timedwait-timeout`). bladeRF-cli's `rx wait 2s` during an
+endless receive was still waiting after 20 s with master; with the fix the
+whole run took 3.6 s. The end-of-run "TX failed with: An unexpected error
+occurred" of the threads test may be the same bug (not checked).
+
+**The adsb revision's decoder, through the AD9361 loopback** (`lib/adsb-loop.c`;
+`results/adsb-loop-*`, `recheck-*`, `recheck2-*`, `ab950-*`). Nuand's ADS-B
+decoder in the adsb revision (Nios V build), fed a made-up DF17 frame
+1,000 times a second through the AD9361's data-port loopback, the messages
+read as Nuand's `bladeRF_adsb` reads them. Version 1 of the program sent the
+frame at DC and got no message at any level: bladeRF_adsb tunes 4 MHz below
+1090 MHz, and the FPGA's front end (`adsb_fe.vhd`) mixes by -Fs/4 and
+low-pass filters (-78 dB at 4 MHz), so a frame at DC is filtered out. From
+version 2 the frame is sent at +Fs/4 (+4 MHz) and the TX LO is at 915 MHz
+(ISM band). Results (20 s, about 20,050 frames per run):
+
+| Run, 20 s at 1,000 frames a second | v2 (one frame) | v3 (reads on 0.3 s after TX stops) | v4 (numbered frames) |
+|---|---|---|---|
+| TX off | 0 messages | 0 | 0 |
+| DC, amplitude 1000 (of 2047) | 0 | 0 | 0 |
+| +Fs/4, amplitude 1000 | 20,019 of 20,055 | 20,041 of 20,042 | 20,033 of 20,035 |
+| 100 | 20,003 of 20,037 | 20,061 of 20,062 | 20,068 of 20,068 |
+| 50 | 20,022 of 20,058 | 20,045 of 20,047 | 20,070 of 20,072 |
+| 40 | | | 20,055 of 20,058 |
+| 30 | | 0 | 0 |
+| 20 | 0 | 0 | |
+
+Every message that came back was exact (v4: no wrong or repeated frame). The
+about 35 frames v2 missed were still queued for TX when it stopped reading.
+The 0 to 3 that v3 and v4 missed were scattered (v4: frames 9786 and 12517;
+2453 and 10586; 15818, 18549 and 20057), not at the start or the end.
+Then 60 s runs at amplitude 1000 (v5, `results/after950-*`), with 32 TX
+buffers (33 ms) and with 128 (131 ms), alternating: 6, 7, 5 and 7 of about
+60,060 frames missing, and the longest gap between `bladerf_sync_tx()`
+returns was 1.5 ms in every run, so the host never let the TX buffers run
+dry. At amplitude 100 (32 buffers) 5 of 60,043 were missing. The missing
+frames follow a fixed pattern in time: 2,731 or 8,133 frames apart (the two
+128-buffer runs had the same seven gaps, shifted by 160 frames). A probable cause, from the code (not proven): the adsb
+revision's RX FIFO (`adsbfifo`, 512 words of 128 bits) holds exactly one
+8 KiB GPIF buffer, and `fx3_gpif.vhd` starts a read only when a whole buffer
+is in the FIFO, so the FIFO is full each time a read is about to start, and
+a slot written then is dropped. The decoder's message aggregator writes
+about 118 padding slots every 10 ms, so those moments drift against the
+1 ms frame grid by about 118 clocks (32 MHz) per 10 ms, which brings a frame
+into one about every 2,710 frames. Nuand's code does the same
+(`results/adsbcmp-*`): adsbxA9 built from `adsb-fix` alone with Quartus
+23.1.1 (Nios II) lost 6 of 60,067 frames at amplitude 1000 and 6 of 60,057
+at 100, with the same gaps; the Nios V image, right after it, 7 and 7 (and
+the last frame of one run, in the partly filled TX buffer). So it is the
+adsb design, not the port.
+
+The decoder finds no frame at amplitude 30, and about 9,999 in 10,000 from
+40 up. Its preamble detector has a fixed power threshold
+(`preamble_detector.vhd`, POWER_THRESHOLD 5000), probably the limit here
+(not worked out).
+
+**The wlan revision's modem** (`lib/wiphy-loop.c`, `lib/wiphy-loop.md`;
+`results/wiphy-*`, `recheck*-*`, `ab950-*`). Unicast 802.11 frames to an
+address that never answers, through the AD9361's data-port loopback; for each
+frame the modem must send one "no ACK" TX report with the frame's cookie.
+Version 1 of the program stopped on every run with "An unexpected error
+occurred" and hung until its time-out: it polled `bladerf_sync_rx()` with a
+time-out (the bug above), and Nuand's driver's stream time-out
+(10,000,000 ms) left the idle receive transfers pending at close. Version 2
+uses a 1 s stream time-out and a longer `bladerf_sync_rx()` time-out.
+Results, each run right after an FPGA load (TX gain 0 dB, 915 MHz):
+
+| Image | status, 20 frames | control (`-n`) | loop mode | status, 64 frames, every rate, 1000 bytes |
+|---|---|---|---|---|
+| wlan, Nuand's code, Quartus 23.1.1 (Nios II) | 1 report (frame 0), 19 missing | pass | 0 back (expected) | 1 report (frame 0), 63 missing |
+| wlan, `niosv` 99f1b2d5, Quartus 25.1 (Nios V) | 1 report (frame 0), 19 missing | pass | 0 back (expected) | 1 report (frame 0), 63 missing |
+
+Both images behave the same, so this is not the Nios V port. It is the
+pattern `wiphy-loop.md` (section 5) predicted from the code for 950189d2
+(2024-03-06, "fix fifo_reader packet mode dma_downcount off-by-one error"):
+`fifo_reader.vhd` ends each TX packet one dword early for wlan_top's
+one-dword reads, so the next packet starts with the stale dword, and every
+frame after the first is read with a wrong header.
+The A/B (`results/ab950-*`): Nuand's master built again with Quartus 23.1.1
+exactly as the image above, but with that one line as it was before
+950189d2 (`meta_future.dma_downcount <= packet_len;` instead of
+`packet_len - 1`; md5 cfea4e6a…):
+
+| Run | Nuand's code | with line 261 before 950189d2 |
+|---|---|---|
+| status, 20 frames, after a load | 1 report (frame 0), 19 missing | 20 of 20 |
+| status, 20 frames again, no reload | 0 of 20 | 20 of 20 |
+| status, 64 frames, every rate, 1000 bytes, after a load | 1 of 64 | 64 of 64 |
+| control (`-n`) | pass | pass |
+| loop mode | 0 back (expected) | 0 back (expected) |
+
+So since 950189d2 the wlan revision sends only the first frame after an
+FPGA load as the host asked (upstream draft I20). The second stock run got
+no report at all: the stale dwords left in the TX FIFO by the first run
+misalign even its first frame, as `wiphy-loop.md` predicted. The demodulator
+is not tested: the stock design blanks its receiver while it transmits.
 
 ## Evidence per change
 
@@ -1109,8 +1372,9 @@ resets until the lockup.
   with the same fit and timing as A, and passes the same tests.
 - Tested on hardware on two boards: the xA5 (sections 3 to 15) and an xA9
   rev 1.3 (section 16: smoke to bist on A, B and C, deep, fullsoak and
-  soak on A and C; C failed only tests A failed too). The xA4 was built
-  only.
+  soak on A and C; C failed only tests A failed too; section 17: Nuand's
+  threads test passes on A and C, and the Nios V adsb and wlan images
+  behave like Nuand's code). The xA4 was built only.
 
 #### 09fcd3eb (tested as 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
 
@@ -1154,6 +1418,10 @@ branch `fixes`, which also had the VCTCXO tamer fix; `host-fixes` has the
 same commits without it, with the same libbladeRF code: 7eabdcb3, e9463ba9,
 fdb03b4e and 3b60e59e there are 2483428a, 53632d98, 16eadeb5 and cd405004
 here.
+
+For the pull requests each fix also has its own branch from master (`pr/*`;
+2483428a is split into a tune-order and a buffer-count change), and each was
+checked alone against master on the xA9 (section 17, "Each fix alone").
 
 #### b49041c9 libbladeRF: discard stale Nios responses
 
@@ -1248,13 +1516,24 @@ here.
   range (95 downto 0)"; 610ad6e2 sizes it FIFO_DATA_WIDTH + 32 bits, still
   96 for the other revisions).
 - With both, adsb builds: Nuand's code with Quartus 23.1.1 (xA4) and `niosv`
-  with 25.1 (xA4, xA5, xA9) (section 11). Built only, not run on hardware.
+  with 25.1 (xA4, xA5, xA9) (section 11).
+- The branch itself, built alone (2026-11-19, `adsb-fix` 610ad6e2 with
+  Nuand/bladeRF-adsb 40b7599, Quartus 23.1.1): adsbxA4 15,884 ALMs (86 %),
+  worst setup −2.814 ns, byte-identical to the 2026-11-14 build of master
+  with the two changes as a patch (md5 f7181684…); adsbxA9 15,838 ALMs
+  (14 %), worst setup −1.923 ns (the decoder at the 125 MHz constraint, as
+  in section 11; md5 e6f31fbe…).
+- On hardware (xA9, section 17): that adsbxA9 and the Nios V image decode
+  the ADS-B loopback's frames alike, every message exact, both losing about
+  1 frame in 10,000 (open item 14).
 
 ## Known noise and open items
 
 1. `rx_meta` with two channels overruns about once in 20 runs, with either
    libbladeRF build and every image (16 buffers of 4096 samples at 4 Msps:
-   16 ms of slack). Not a regression.
+   16 ms of slack). Not a regression. On the xA9 in FPGA tuning mode
+   (section 17): 2 of 14 runs with P2 alone (both in one session, at the
+   same sample), 0 of 17 with all fixes.
 2. Run times of `ctrl_bandwidth-fpga` vary between 10 and 26 s in every
    configuration; integer-second timings make small differences look large.
 3. Test order matters: `test_digital_loopback -l fpga` leaves the RX mux at
@@ -1310,8 +1589,11 @@ here.
     of 14 runs, on every FPGA image, and on Linux on the 6th run (the XPS,
     section 16). Branch `fx3-epnak` (8d886dbc: NAK the endpoint around the
     reset, as the FX3 SDK's examples do) locked up in 0 of 40 on the MacBook
-    Air, and a 10-minute soak of normal use with it passed; not yet run on
-    Linux. Results, images and tools: `results/xA9-mba/` on the XPS.
+    Air, and a 10-minute soak of normal use with it passed. On Linux
+    (section 17) it locked up in 0 of 80, and so did the same change
+    rebased onto master (`fx3-epnak-master`, FX3 2.6.1). Results, images
+    and tools: `results/xA9-mba/`, `results/nak-linux-*`, `nak-master-*` on
+    the XPS.
 11. To investigate: the FX3 firmware built with the FX3 SDK 1.3.5
     libraries. Nuand's 2.6.0 links the SDK's 1.3.3 libraries: it rebuilds
     byte for byte from the 1.3.5 SDK package with `FX3_SDK_VERSION` "1.3.3"
@@ -1332,6 +1614,28 @@ here.
     release notes as text and the library-matching tool are in
     `~/workarea/fx3-sdk/` and `~/workarea/builds/scripts/fx3libmatch.py` on
     the XPS.
+
+12. libbladeRF reports a timed-out wait as "An unexpected error occurred"
+    (BLADERF_ERR_UNEXPECTED) instead of BLADERF_ERR_TIMEOUT, and bladeRF-cli's
+    `rx wait <time>` never times out: `thread.h`'s `posix_cond_timedwait()`
+    returns -1 where its callers expect ETIMEDOUT (section 17; upstream
+    draft I19). Fixed on the local branch `pr/cond-timedwait-timeout`.
+    Programs that poll `bladerf_sync_rx()` with short time-outs (version 1
+    of `lib/wiphy-loop.c`) stop on it.
+13. The wlan revision (Nuand's code since 950189d2, 2024-03-06, and the Nios
+    V build alike) sends only the first 802.11 frame after an FPGA load as
+    the host asked: `fifo_reader.vhd` line 261 (`dma_downcount <=
+    packet_len - 1`) ends each TX packet one dword early for wlan_top's
+    one-dword reads. With `packet_len` (as before 950189d2) every frame is
+    reported (section 17, A/B). 950189d2 made fx3_gpif_packet_tb pass, whose
+    consumer holds packet_ready high; a fix must suit both kinds of reader.
+    Upstream draft I20.
+14. The adsb revision loses about 1 decoded message in 10,000 (1,000 frames
+    a second through the AD9361 loopback), in a fixed pattern in time, not
+    from host stalls (section 17). Probable cause: its RX FIFO is exactly
+    one GPIF buffer deep, so the GPIF reads only when the FIFO is full.
+    Nuand's own build (Quartus 23.1.1, Nios II) loses frames the same way;
+    a deeper FIFO has not been tried. Upstream draft I21.
 
 ## How to repeat
 
