@@ -7,7 +7,7 @@
  *   hwtest-stream rxcheck  -f FMT [-l x1|x2] [-r RATE] [-t SECONDS] [-W WARMUP_S]
  *   hwtest-stream loopback -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS] [-A] [-O]
  *   hwtest-stream rxcap    -f FMT [-c CH] [-r RATE] -n SAMPLES -o FILE
- *                          [-F FREQ] [-g GAIN] [-O]
+ *                          [-F FREQ] [-g GAIN] [-O] [-W WARMUP_S]
  *   hwtest-stream tx       -f FMT [-l x1|x2] [-c CH] [-r RATE] [-t SECONDS]
  *                          (-i FILE | -T TONE_HZ) [-F FREQ] [-g GAIN] [-O]
  *   hwtest-stream trigger  rx [-f FMT] [-r RATE]
@@ -40,8 +40,10 @@
  *           interface both ways: a check of the TX side of that interface.
  *           TX and RX stream at once, so the rate is also bounded by what
  *           the FX3 and USB carry both ways.
- * rxcap     receives SAMPLES samples into memory, then writes them to FILE
- *           (raw interleaved I/Q, int16 or int8): no file I/O while streaming.
+ * rxcap     receives SAMPLES samples into memory after WARMUP_S (default
+ *           0.25 s, as rxcheck: past libbladeRF's start-up reordering), then
+ *           writes them to FILE (raw interleaved I/Q, int16 or int8): no file
+ *           I/O while streaming.
  * tx        transmits FILE (raw interleaved I/Q in the format's sample type,
  *           one channel; duplicated for x2), repeated, or a generated tone
  *           TONE_HZ from the carrier at half scale, for SECONDS, and prints
@@ -1050,8 +1052,13 @@ static int do_rxcap(struct bladerf *dev, struct opts *o)
         enable_channels(dev, o, BLADERF_RX, true) != 0) {
         return 2;
     }
-    /* let the stream settle, then capture */
-    for (int j = 0; j < 16; j++) {
+    /* Warm-up, as rxcheck's: receive without keeping for WARMUP_S, and at
+     * least 16 buffers. libbladeRF's start-up reordering (see struct cover)
+     * delivers one of the stream's first ~32 buffers late; 16 buffers were
+     * not enough to skip it (2026-11-20: every PRI error of pulse-check's
+     * oc-rx cases fell in the stream's buffers 16 to 33). */
+    t0 = now();
+    for (int j = 0; j < 16 || now() - t0 < o->warmup; j++) {
         if (rx_buffer(dev, o, buf, n, &md, &next_ts, &gaps, &ovr, TIMEOUT_MS, false) != 0) {
             return 2;
         }
