@@ -170,7 +170,8 @@ def measure_pulses(x, fs, smooth_s):
     rises, falls = np.array(rises), np.array(falls)
     # not the first or the last pulse either: the capture's start or end can
     # cut one, and a receiver's first samples can be a short gap that passes
-    # for a rise (one 10 us pulse measured 0.22 us that way, 9.8 us late)
+    # for a rise (one 10 us pulse measured 0.22 us that way, 9.8 us late; the
+    # B200mini's first samples are dropped since, rf-check.B200_START_DISCARD)
     edge = 2 if len(rises) >= 5 else 0
     if edge:
         rises, falls = rises[1:-1], falls[1:-1]

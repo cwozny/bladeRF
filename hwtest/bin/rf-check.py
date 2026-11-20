@@ -166,8 +166,20 @@ def b200_rate(u, fs, tx):
                            % ("TX" if tx else "RX", actual, fs))
 
 
+# The first samples of every B200mini stream come out of its receive filters
+# while they still fill: within the first 20 samples the level dips to 10 to
+# 30 %, or the samples are zero, at every rate measured (20 starts per rate,
+# 2026-11-20): sample 18 at 0.1, 1 and 2 Msps, 11-13 at 4, 12-14 at 5, 18-19
+# at 10, 12-16 at 20, and 0-9 zero at 30.72 Msps (no decimation). One such
+# dip split a pulse and failed an oc_pulse_tx case (TESTING.md section 18).
+# b200_capture drops them; 32 is past the last (19) with margin, and with it
+# no dip is left at any of these rates.
+B200_START_DISCARD = 32
+
+
 def b200_capture(u, n, fc, fs, gain):
-    """Receive n samples with the B200mini; fails on any dropped samples."""
+    """Receive n samples with the B200mini, after the stream's first
+    B200_START_DISCARD; fails on any dropped samples."""
     import uhd
     b200_rate(u, fs, False)
     u.set_rx_freq(uhd.types.TuneRequest(fc), 0)
@@ -175,27 +187,28 @@ def b200_capture(u, n, fc, fs, gain):
     st = u.get_rx_stream(uhd.usrp.StreamArgs("fc32", "sc16"))
     md = uhd.types.RXMetadata()
     buf = np.zeros((1, st.get_max_num_samps()), dtype=np.complex64)
-    out = np.empty(n, dtype=np.complex64)
+    total = n + B200_START_DISCARD
+    out = np.empty(total, dtype=np.complex64)
     errors = []
     cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
     cmd.stream_now = True
     st.issue_stream_cmd(cmd)
     got = 0
-    while got < n:
+    while got < total:
         k = st.recv(buf, md, 1.0)
         if md.error_code != uhd.types.RXMetadataErrorCode.none:
             errors.append(md.strerror())
             if md.error_code == uhd.types.RXMetadataErrorCode.timeout:
                 break
-        k = min(k, n - got)
+        k = min(k, total - got)
         out[got:got + k] = buf[0, :k]
         got += k
     st.issue_stream_cmd(uhd.types.StreamCMD(uhd.types.StreamMode.stop_cont))
     while st.recv(buf, md, 0.1):
         pass
-    if errors or got < n:
+    if errors or got < total:
         raise RuntimeError("B200mini RX dropped samples: %s" % "; ".join(errors[:3]))
-    return out
+    return out[B200_START_DISCARD:]
 
 
 def b200_transmit(u, proto, fc, fs, gain, stop, result):
