@@ -453,6 +453,40 @@ two equal signals adding in phase in a Wilkinson make about +3 dBm, so
 -17 dBm at the B200mini, still below its -15 dBm (twoch-check.py's 30 dB TX
 gain makes about -50 dBm there).
 
+A splitter whose band does not cover all of twoch's points (433 MHz to
+5.8 GHz): put a 20 dB attenuator on each of its two outputs instead of 20 dB
+on its common port, and run only the twoch phase (no other port faces the
+B200mini):
+
+    RX setup (HWTEST_2CH=rx), 20 dB on each output:
+    B200mini TX/RX -> splitter -> 20 dB -> bladeRF RX1
+                               -> 20 dB -> bladeRF RX2
+    bladeRF TX1, TX2 and B200mini RX2: loads
+
+    TX setup (HWTEST_2CH=tx), the same splitter and attenuators turned round:
+    bladeRF TX1 -> 20 dB -> splitter -> B200mini RX2
+    bladeRF TX2 -> 20 dB ->
+    bladeRF RX1, RX2 and B200mini TX/RX: loads
+
+Outside its band a Wilkinson still divides equally (it is symmetric), but its
+isolation falls towards that of a plain tee. The switched-off channel's port
+then reflects into the active one: through a lossless tee that moves the
+active channel's level by +3.5 dB down to a null, depending on the
+reflection's phase (beyond the 7 dB of `SINGLE_DUAL_MAX_DB` for about 1 phase
+in 10). An attenuator between each output and its port takes twice its value
+off that reflection: with 20 dB the move stays within 0.1 dB at any phase,
+so no check depends on the splitter's isolation. Each link still has 20 dB
+plus the split, and the levels are those of the setups above (each receiver
+about -54 dBm at twoch-check.py's gains; at the TX cap the B200mini gets at
+most about -18 dBm). The tee's figures are from a circuit model of an ideal
+lossless tee, not measured. The bench's splitter since 2026-11-20: TOJOIN PS-2SM-2080,
+2-8 GHz, insertion loss with the split 3.7 dB typical and 4 dB maximum,
+isolation 18 dB minimum, amplitude balance 0.3 dB and phase balance 5 degrees
+maximum, DC not specified (its datasheet,
+https://www.lcsc.com/datasheet/C42381207.pdf, is one picture of a page). Its
+outputs are not numbered: mark them, so that a record can say which output
+went to which port.
+
 ## Scripts
 
 | Script | What it does |
