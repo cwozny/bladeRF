@@ -42,7 +42,9 @@ the kernel log) the bladeRF was on a USB-C port of the laptop (2-3); after
 that it was behind the VIA hub of a USB-C adapter (port 2-1.3).
 Timings from before and after that change do not compare. On 2026-11-16 at
 22:07 it moved to the laptop's other USB-C port (2-3), and the B200mini,
-which had that port, went off USB (section 14).
+which had that port, went off USB (section 14). On 2026-11-19 at 23:25 the
+xA9 went behind the hub again (2-1.3) and the B200mini back on 2-3, for the
+RF tests of section 18.
 
 **RF reference:** an Ettus USRP B200mini (UHD, python3-uhd), an independent
 radio that transmits and measures for `bin/rf-check.py` and
@@ -56,6 +58,7 @@ radio that transmits and measures for `bin/rf-check.py` and
 | from 2026-11-13 (transmit tests) | 50 Ω load | 50 Ω load | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX |
 | 2026-11-15 07:52 (channel 1, section 13) | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX | 50 Ω load | 50 Ω load |
 | from 2026-11-15 10:43 (Nuand's threads test, section 14) | 20 dB → 20 dB → B200mini RX2 | 50 Ω load | 50 Ω load | 50 Ω load |
+| from 2026-11-19 23:25 (the xA9 at RF, section 18) | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX | 50 Ω load | 50 Ω load |
 
 Receive-only runs preload the no-TX guard (`lib/no-tx-guard.c`): nothing can
 enable a TX channel. Transmit runs (`HWTEST_TX=1`, only with one of the
@@ -1353,6 +1356,103 @@ no report at all: the stale dwords left in the TX FIFO by the first run
 misalign even its first frame, as `wiphy-loop.md` predicted. The demodulator
 is not tested: the stock design blanks its receiver while it transmits.
 
+### 18. The xA9 at RF against the B200mini (night of 2026-11-19/20)
+
+The xA9 with channel 1 cabled to the B200mini as the xA5 was in section 13
+(the cabling table's last row: TX1 → 20 dB → B200mini RX2, B200mini TX/RX →
+20 dB → RX1, loads on TX2 and RX2), the bladeRF behind the USB hub (2-1.3)
+and the B200mini on the laptop's port (2-3), `HWTEST_TX=1`,
+`HWTEST_RF_CH=1`. Campaign `rfch1` (`plans/rfch1-xA9-20261119.txt`, job
+script `xa9-rfch1.sh`; this section's job scripts are in
+`~/workarea/builds/scripts/` on the XPS; results
+`results/xA9-{A,B,C}-rfch1{,-fixes}/` and `results/rfch1-*`): phases rf,
+formats and oc with only the tests that use the B200mini (the others ran in
+section 16), images C, A and B with Nuand's libbladeRF (`host-build`), then
+with the all-fixes build (`host-build-threads-keep250`, `HWTEST_FIXES=1`,
+which adds the five two-channel fmt_txrf cases in FPGA tuning mode). 23:32
+to 00:35, no stop.
+
+| Run | A | B | C |
+|---|---|---|---|
+| Nuand's libbladeRF (32 tests) | 30 | 31 | 31 |
+| all fixes (37 tests) | 35 | 36 | 37 |
+
+Every failure was `oc_pulse_rx` (below). The rest passed on every image:
+
+- rf-check (100 MHz to 5.8 GHz, both directions, both tuning modes): the
+  tone found at every point; the six runs within 1.2 dB of each other at
+  every point but one: B, Nuand's libbladeRF, host mode, TX at 5.8 GHz read
+  −61.2 dBFS against −56.7 to −57.4, with the same total power as the other
+  runs (−55.4 dBFS rms), so the tone was spread, not weaker (once in 84 TX
+  readings; not repeated). The frequency error is the same on every image:
+  about +2.0 ppm (TX) and −2.0 ppm (RX) against the B200mini at every
+  frequency, the two boards' reference oscillators (the xA5: 0.9 ppm).
+- fmt_txrf: 15 of 15 cases (20 of 20 with the fixes) on every image.
+- oc_pulse_tx and oc_pulse_tx_meta (the bladeRF transmits pulses at
+  122.88 Msps, SC8 and SC8 meta, and the B200mini measures them): 12 of 12
+  cases in every run. On the xA5's channel 1 (section 13, `ch1b`) 6 of 12
+  (A) and 7 of 12 (C) failed on short false pulses (1 to 11 per failed
+  case, once 768 on A); its channel 2 had none (sections 7 and 9).
+
+**The xA9 against the xA5 on channel 1** (the mean of the xA9's six runs
+against the mean of the xA5's `ch1b` runs on A and C): within 1.5 dB at
+every point in both directions, except TX at 100 MHz: 12.9 dB stronger on
+the xA9. The low-band sweep of section 13 (`bin/rf-lowband.py`, host mode,
+2 Msps, image A; `results/ocprobe-20261120-004638/`, job script
+`xa9-ocprobe.sh`):
+
+| MHz | 70 | 85 | 100 | 125 | 150 | 200 | 250 | 300 | 433 |
+|---|---|---|---|---|---|---|---|---|---|
+| xA9 TX1 tone (dBFS) | −31.9 | −31.7 | −31.7 | −32.6 | −31.8 | −32.8 | −32.0 | −31.8 | −31.9 |
+| xA5 TX1 tone (dBFS) | −34.8 | −43.0 | −45.6 | −46.8 | −39.2 | −36.2 | −33.4 | −32.2 | −32.6 |
+| xA9 RX1 tone (dBFS) | −11.5 | −11.5 | −11.5 | −12.5 | −11.7 | −12.8 | −12.3 | −12.5 | −12.3 |
+| xA5 RX1 tone (dBFS) | −11.3 | −11.9 | −11.5 | −12.3 | −11.6 | −12.7 | −12.1 | −12.6 | −12.2 |
+
+The xA9's TX1 is flat where the xA5's dips, and the B200mini's noise floor
+while it transmits stays at −114.5 to −116.1 dBFS (the xA5's TX1: −99 at
+100 MHz). At 100 MHz the xA9's image is −74 to −91 dBc in both directions
+(the xA5: −52 to −57 on channel 1, −42 to −48 on channel 2). So open item
+9's TX1 dip belongs to that xA5 board. RX1 at 5.8 GHz: −53.5 to −54.5 dBFS
+on the xA9 (the xA5: RX1 −55.0 to −55.9, RX2 −51.7 to −52.1); the xA9's RX2
+has not been measured.
+
+**Overclocked receive** (`oc_pulse_rx`: the B200mini sends pulses, the
+bladeRF captures 0.25 s at 122.88 Msps, SC8). On the xA5 the samples were
+unusable at this rate (section 7). On the xA9 they are usable: with nothing
+sent they spread 1.5 LSB (I) and 3.7 to 4.2 LSB (Q) rms, none at full scale
+(the larger Q spread is probably section 17's bit errors at the default
+delay), the pulses are 37 to 39 dB above the gaps and their widths within
+about 10 ns rms. Still 10 of the 36 captures failed (A 4, B 4, C 2), each on
+one to three PRIs, on every image, in both tuning modes and with either
+libbladeRF build. The worst PRI of every failed case was off by a whole
+number of rxcap buffers (32,768 samples, 266.667 µs) modulo the PRI, within
+10 ns: samples out of place, not corrupted.
+
+Where they fall (`results/ocprobe-20261120-004638/`, `bin/ocrx-locate.py`:
+the oc-rx cases with 0.35 s captures, 9 captures): every bad PRI lay in the
+stream's buffers 16 to 33, the first 4.5 ms that rxcap kept (it dropped only
+the first 16 buffers); judged from 0.1 s on, all 9 captures pass. The FPGA's
+counter with no warm-up (`rxcheck -W 0`, 10 starts each) shows that window:
+one of buffers 16 to 31 comes right after buffer 32 (the tool keeps 32
+transfers in flight), late by 1 to 16 buffers, in 7 of 10 starts at SC16
+61.44 Msps (nothing lost or repeated) and 3 of 10 at SC8 122.88 Msps
+overclocked; the campaign's `rx_order` (SC16, 61.44 Msps, 10 starts per run)
+found a late buffer in 3 to 8 of 10 starts in every run, with every image
+and either build. That is libbladeRF's start-up reordering (section 7's
+`rx_order`; upstream draft I9), which rxcheck skips with its 0.25 s warm-up.
+rxcap now warms up the same way (40626924). The six runs again with it
+(`plans/ocrx2-xA9-20261120.txt`, job script `xa9-ocrx2.sh`, results
+`results/xA9-{A,B,C}-ocrx2{,-fixes}/`; the patched hwtest-stream built on
+its own and given to pulse-check.py with `HWTEST_STREAM`): all 36
+captures pass, on every image, in both tuning modes, with either build (each
+test 1 to 2 s longer: the warm-ups). The samples as before: 1.5 (I) and 3.6
+to 4.0 (Q) LSB rms with nothing sent, the pulses 38 to 39 dB above the gaps,
+their widths within 10 to 11 ns rms, and the mean pulse interval 1.9 to
+2.1 ppm from the B200mini's: the two boards' clock difference that rf-check
+measures too. So with the default interface delay the xA9 receives at
+122.88 Msps well enough for pulse timing on all three images; the bit
+errors of section 17 remain.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -1366,15 +1466,17 @@ is not tested: the stock design blanks its receiver while it transmits.
 - Image C passes everything image A passes, in every campaign above
   (sections 3 to 7), in both tuning modes, with Nuand's libbladeRF and with
   the fixes; RF performance matches A on channel 2 (section 4) and on
-  channel 1 (section 13); no time-out in 150-minute receive and 90-minute
-  transmit soaks (sections 3, 5).
+  channel 1 (section 13), and on the xA9's channel 1 (section 18); no
+  time-out in 150-minute receive and 90-minute transmit soaks (sections 3,
+  5).
 - Image B: the restructured Qsys script still builds Nuand's Nios II design,
   with the same fit and timing as A, and passes the same tests.
 - Tested on hardware on two boards: the xA5 (sections 3 to 15) and an xA9
   rev 1.3 (section 16: smoke to bist on A, B and C, deep, fullsoak and
   soak on A and C; C failed only tests A failed too; section 17: Nuand's
   threads test passes on A and C, and the Nios V adsb and wlan images
-  behave like Nuand's code). The xA4 was built only.
+  behave like Nuand's code; section 18: at RF against the B200mini, A, B
+  and C the same). The xA4 was built only.
 
 #### 09fcd3eb (tested as 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
 
@@ -1576,11 +1678,14 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    has been checked at RF on its own (channel 2 in sections 4 to 12, channel
    1 in section 13). twoch-check.py does both at once through a 2-way
    splitter (README.md); it has not run on hardware yet.
-9. Seen on Nuand's image as on ours: TX1 is weaker around 100-125 MHz than
-   elsewhere (up to 14 dB) and than TX2 at 100 MHz (13 dB), and RX1 is
-   3.5 dB weaker than RX2 at 5.8 GHz (section 13; this board). The start of
-   every transmission brings up to ~0.7 s of short, weak, off-frequency
-   bursts (section 13; cause not investigated).
+9. Seen on Nuand's image as on ours, on the xA5: TX1 is weaker around
+   100-125 MHz than elsewhere (up to 14 dB) and than TX2 at 100 MHz
+   (13 dB), and RX1 is 3.5 dB weaker than RX2 at 5.8 GHz (section 13). The
+   xA9's TX1 is flat from 70 to 433 MHz and as strong at 100 MHz as the
+   xA5's TX2 (section 18), so the TX1 dip belongs to that xA5 board; the
+   xA9's RX2 has not been measured. The start of every transmission brings
+   up to ~0.7 s of short, weak, off-frequency bursts (section 13; cause not
+   investigated).
 10. An FX3 lockup with a known trigger and a fix (2026-11-18, the xA9 on a
     MacBook Air, receive only; not yet a section here, see upstream draft
     15). A two-channel receive started in FPGA tuning mode in bladeRF-cli's
