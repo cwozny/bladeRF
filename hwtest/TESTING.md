@@ -1511,12 +1511,19 @@ In the one failure the envelope dropped to 1 % of the pulse level for
 about 0.1 µs within the first microsecond of the B200mini's capture. That
 split the capture's first pulse, which pulse-check drops, so its second
 part counted as the first whole pulse (0.60 µs wide, 9.60 µs to the next).
-A glitch at a random time would fall there in about one capture of
-250,000, so the cause is the capture's start: the B200mini's first
-samples, or the B200mini starting its stream on the laptop's USB bus while
-the bladeRF sends 246 MB/s (not resolved). Over both channels C failed 2 of
-96 overclocked transmit cases, A 0 of 96 and B 0 of 48: not a significant
-difference (Fisher's exact test, p = 0.5). Open item 15.
+That gap is the B200mini's own start. Its receive filters are still
+filling when a stream starts: within the first 20 samples the level dips to
+10 to 30 %, at every rate the harness uses (0.1 to 30.72 Msps, 20 starts
+each, receive only, job scripts `b200-start.py` and `b200-start2.py`), and
+at 30.72 Msps (no decimation) the first 10 samples are zero. At 20 Msps the
+dip is at samples 12 to 16, where this capture's gap was. Every B200mini
+capture of the harness goes through rf-check's `b200_capture`, which now
+drops the first 32 samples (d000776b). With that, no dip is left at any of
+those rates, the failed capture passes when judged again, and oc-tx (3 of 3
+cases) and rf-check (every point) pass on A. Without that failure, C failed
+1 of 96 overclocked transmit cases over both channels (the false pulses
+above), A 0 of 96 and B 0 of 48: not a significant difference. Open item
+15.
 
 ## Evidence per change
 
@@ -1541,7 +1548,7 @@ difference (Fisher's exact test, p = 0.5). Open item 15.
   soak on A and C; C failed only tests A failed too; section 17: Nuand's
   threads test passes on A and C, and the Nios V adsb and wlan images
   behave like Nuand's code; section 18: at RF against the B200mini on both
-  channels, A, B and C the same, C's 2 overclocked transmit failures in 96
+  channels, A, B and C the same, C's one overclocked transmit failure in 96
   cases within chance). The xA4 was built only.
 
 #### 09fcd3eb (tested as 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
@@ -1812,10 +1819,10 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     xA9's data port carries every TX bit, section 17) sometimes reaches the
     B200mini with glitches. Short false pulses (tens of ns) came in about
     half of the xA5's channel 1 cases, on A and C alike (section 13), and in
-    1 of the xA9's 240 cases (C, channel 2); once a 0.1 µs gap at the start
-    of a B200mini capture split its first pulse (C, channel 2; section 18).
-    No false pulses on the xA5's channel 2 or the xA9's channel 1. Cause not
-    investigated.
+    1 of the xA9's 240 cases (C, channel 2). No false pulses on the xA5's
+    channel 2 or the xA9's channel 1. Cause not investigated. (One more
+    failure on C was the B200mini's own start, which the harness now drops;
+    section 18.)
 
 ## How to repeat
 
