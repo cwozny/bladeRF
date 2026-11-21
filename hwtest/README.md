@@ -477,7 +477,8 @@ in 10). An attenuator between each output and its port takes twice its value
 off that reflection: with 20 dB the move stays within 0.1 dB at any phase,
 so no check depends on the splitter's isolation. Each link still has 20 dB
 plus the split, and the levels are those of the setups above (each receiver
-about -54 dBm at twoch-check.py's gains; at the TX cap the B200mini gets at
+about -54 dBm at twoch-check.py's gains, 10 dB more at 5.8 GHz, where it
+sets the B200mini's TX gain to 60 dB; at the TX cap the B200mini gets at
 most about -18 dBm). The tee's figures are from a circuit model of an ideal
 lossless tee, not measured. The bench's splitter since 2026-11-20: TOJOIN PS-2SM-2080,
 2-8 GHz, insertion loss with the split 3.7 dB typical and 4 dB maximum,

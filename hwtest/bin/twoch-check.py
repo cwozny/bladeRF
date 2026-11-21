@@ -104,10 +104,17 @@ RX_GAIN_LOW = RX_GAIN - GAIN_STEP_DB    # 5 dB: within every band's range (-16..
 TX_GAIN_LOW = TX_GAIN - GAIN_STEP_DB    # 20 dB
 TX_GAIN_MAX = 60                # never more (lib/tx-cap.c caps it there too)
 B200_TX_GAIN = rf.B200_TX_GAIN  # dB (50, about -30 dBm out)
+# ... except at 5.8 GHz, where the B200mini's signal reaches the bladeRF
+# about 30 dB weaker than at 433 MHz. With 50 dB there, the two channels'
+# coherence over the chirp's band had a median of 0.68, and only 23 bins
+# reached COH_MIN: too few for the fractional-lag fit (the xA9 through the
+# TOJOIN splitter with 20 dB on each output, 2026-11-20). 10 dB more gives
+# a median of about 0.96, if the bladeRF's own noise stays as it is.
+B200_TX_GAIN_AT = {5800e6: 60}
 B200_AMP = 0.5                  # B200mini tone and chirp amplitude (as rf-check)
 TONE_AMP = 0.5                  # bladeRF TX tone amplitude per channel (as rf-check)
 assert TX_GAIN <= TX_GAIN_MAX and TX_GAIN_LOW <= TX_GAIN_MAX
-assert B200_TX_GAIN <= rf.B200_TX_GAIN_MAX
+assert max([B200_TX_GAIN] + list(B200_TX_GAIN_AT.values())) <= rf.B200_TX_GAIN_MAX
 
 # bladeRF RX captures. Every capture starts with SKIP_S of samples that are
 # not analyzed: libbladeRF starts the stream when the channel is enabled and
@@ -676,6 +683,11 @@ def work_dir():
     return tempfile.TemporaryDirectory(dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
 
 
+def b200_tx_gain(fc):
+    """The B200mini's TX gain at fc (rx subcommand)."""
+    return B200_TX_GAIN_AT.get(fc, B200_TX_GAIN)
+
+
 def with_b200_tx(u, proto, fc, fs, fn):
     """Runs fn() while the B200mini sends proto over and over at fc (rf-check's
     b200_transmit, gain capped there); fails on a late underflow."""
@@ -684,7 +696,7 @@ def with_b200_tx(u, proto, fc, fs, fn):
 
     def run():
         try:
-            rf.b200_transmit(u, proto, fc, fs, B200_TX_GAIN, stop, txr)
+            rf.b200_transmit(u, proto, fc, fs, b200_tx_gain(fc), stop, txr)
         except Exception as e:      # reported below
             txr["error"] = str(e)
 
@@ -720,7 +732,7 @@ def rx_meta(point):
         caps["retune%d" % i] = {"chans": [1, 2], "n": n(RX_RETUNE_S)}
     caps["bb"] = {"chans": [1, 2], "n": n(RX_BB_S)}
     return {"mode": "rx", "fc": fc, "fs": fs, "f_off": f_off, "gain": RX_GAIN,
-            "gain_low": RX_GAIN_LOW, "skip_n": int(round(SKIP_S * fs)),
+            "gain_low": RX_GAIN_LOW, "b200_tx_gain": b200_tx_gain(fc), "skip_n": int(round(SKIP_S * fs)),
             "retune_away": away, "chirp_n": CHIRP_N, "chirp_span": CHIRP_SPAN, "caps": caps}
 
 
@@ -1210,7 +1222,9 @@ def self_test():
             SAVE_DIR = saved
 
     print("safety and commands")
-    check(B200_TX_GAIN <= rf.B200_TX_GAIN_MAX, "B200mini TX gain %g <= %g" % (B200_TX_GAIN, rf.B200_TX_GAIN_MAX))
+    b200_gains = sorted(set(b200_tx_gain(p[0]) for p in TWOCH_POINTS))
+    check(max(b200_gains) <= rf.B200_TX_GAIN_MAX and b200_tx_gain(5800e6) == 60 and b200_tx_gain(433e6) == B200_TX_GAIN,
+          "B200mini TX gains %s <= %g" % (b200_gains, rf.B200_TX_GAIN_MAX))
     check(TX_GAIN == rf.BLADERF_TX_GAIN == 30 and max(r[3] for r in TX_RUNS) <= TX_GAIN_MAX and
           max(r[4] for r in TX_RUNS) <= TX_GAIN_MAX, "bladeRF TX gains %s <= %d"
           % (sorted(set(r[3] for r in TX_RUNS) | set(r[4] for r in TX_RUNS)), TX_GAIN_MAX))
