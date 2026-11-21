@@ -1635,8 +1635,44 @@ each, 65 pass, no retries; each run 8 minutes. The ranges over all of them:
   so the two paths agree within 0.07 dB in this direction too (the swap
   above), and that difference is the board's. At 5.8 GHz this board's
   channel 2 is the weaker transmitter and the stronger receiver.
-- The transmit test does not measure the phase or the timing between TX1
-  and TX2: the two tones have different frequencies.
+- These runs do not measure the phase or the timing between TX1 and TX2:
+  the two tones have different frequencies. The sync runs below do.
+
+**Transmit phase and timing** (2026-11-21: twoch-check.py's sync runs,
+README.md "tx, sync runs", hwtest 2cd48cc3; `HWTEST_2CH_TX=sync`, the same
+cabling; `plans/twochtx-sync-xA9-20261121-0648.txt`, results
+`results/twochtx-sync-20261121-064502/` and
+`results/xA9-{A,B,C}-twochtx-sync{,-fixes}/`). Both channels send the same
+29-line multitone, TX2's turned by 0°, 90°, 180° and 270° in four blocks;
+from each line's power in the four blocks follows the cross-spectrum of TX1
+and TX2, with no lock between the two radios. 06:45 to 07:24, no stop. The
+pre-check and all six runs passed: images C, A and B, in both tuning modes
+with either build. 65 records, each with three sync runs (the second and
+third after tuning 20 MHz or an octave away and back), 65 pass, no
+retries; each run 6 minutes. The ranges over all 195 captures:
+
+| Point | TX2 − TX1 phase at the carrier | TX2's lag: whole / fraction (samples) | Phase spread over a capture's cycles | Lag spread | Phase over the three runs | Line SNR (median) |
+|---|---|---|---|---|---|---|
+| 433 MHz | +0.7° | 0 / ≤ 0.001 | ≤ 0.1° | ≤ 0.001 | within 0.1° | ≥ 60 dB |
+| 915 MHz | +1.6° | 0 / ≤ 0.001 | ≤ 0.2° | ≤ 0.002 | within 0.1° | ≥ 56 dB |
+| 1575.42 MHz | +2.2° | 0 / ≤ 0.001 | ≤ 0.2° | ≤ 0.003 | within 0.1° | ≥ 53 dB |
+| 3.5 GHz | −14.2° to −14.5° | 0 / ≤ 0.003 | ≤ 0.8° | ≤ 0.013 | within 0.3° | ≥ 40 dB |
+| 5.8 GHz | −6.8° to −8.1° | 0 / ≤ 0.011 | ≤ 3.1° | ≤ 0.045 | within 0.7° | ≥ 28 dB |
+
+- TX2 was at lag 0 in every capture. The markers' coarser lag agreed
+  with it: within 2 samples at 3.5 GHz and below, 8.6 at most at 5.8 GHz
+  (the check allows 15).
+  The three images, both tuning modes (in FPGA tuning mode the Nios does
+  the retunes) and both builds gave the same phases.
+- TX2's phase relative to TX1 stays where it was after each retune (class
+  "stable" at every point), as RX2's relative to RX1 did above.
+- The phases include the two paths' own difference, which the swap above
+  put at 1.4° or less.
+- Both spreads are noise: they grow as the lines' signal-to-noise ratio
+  falls. At 5.8 GHz the largest phase spread, 3.1°, is 1.9° below the 5°
+  limit.
+- The B200mini is +1.9 to +2.2 ppm from the bladeRF at every point, as in
+  section 18.
 
 ## Evidence per change
 
@@ -1862,8 +1898,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    and the adsb revision setup timing in Nuand's own builds (section 11).
 8. Both channels' RF at the same time: twoch-check.py does it through a
    2-way splitter (README.md). Receive and transmit pass on A, B and C, in
-   both tuning modes, on the xA9 (section 19). The transmit test does not
-   measure the phase or the timing between TX1 and TX2.
+   both tuning modes, on the xA9 (section 19), and so do TX1's and TX2's
+   phase and timing: TX2 at lag 0, its phase stable after retunes.
 9. Seen on Nuand's image as on ours, on the xA5: TX1 is weaker around
    100-125 MHz than elsewhere (up to 14 dB) and than TX2 at 100 MHz
    (13 dB), and RX1 is 3.5 dB weaker than RX2 at 5.8 GHz (section 13). The

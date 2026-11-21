@@ -80,8 +80,9 @@ without them; `HWTEST_FPGA_MIMO=1` is its older name), `HWTEST_RF_CH=1|2`
 (the bladeRF channel cabled to the B200mini, default 2; for a whole campaign,
 see "Cabling for TX runs"), `HWTEST_2CH=rx|tx|both` (the two-channel setup
 that is cabled, for the twoch phase; also for a whole campaign, same
-section), `SOAK_MINUTES`, `FULLSOAK_RX_MIN`, `FULLSOAK_LOOP_MIN` and
-`BIST_MIN`.
+section), `HWTEST_2CH_TX=sync` (twoch's tx makes only its sync runs; for a
+whole campaign, in its environment), `SOAK_MINUTES`, `FULLSOAK_RX_MIN`,
+`FULLSOAK_LOOP_MIN` and `BIST_MIN`.
 
 Things that fail with every image, including the official one, so the
 harness does not run them that way:
@@ -345,6 +346,22 @@ reasons in `fails`.
   alone is more than 7 dB from its two-channel level, or the other
   channel's tone is less than 30 dB below it. Reported: each channel's image
   and LO leakage, alone and together.
+* **tx, sync runs** (TX phase and timing): three more bladeRF-cli runs of a
+  two-channel file of repeated cycles. In the first block of a cycle each
+  channel sends its own marker tone; in the next four both send the same
+  29-line multitone (±0.35 fs), TX2's turned by 0°, 90°, 180° and 270°. The
+  B200mini, tuned to the carrier, receives the two channels' sum: each line's
+  power in the four blocks gives the cross-spectrum of TX1 and TX2 at that
+  line, so the two radios need no common clock or LO. It fails if TX2 is not
+  at lag 0 (whole samples from the markers' blocks) or its fractional lag
+  (from the slope of the cross-spectrum's phase) is over a quarter sample;
+  if TX2's phase at the carrier spreads by more than 5°, or its lag by more
+  than a quarter sample, over the cycles of a capture (a lost or extra sample
+  moves the lag by one); or if fewer than 15 of the 29 lines stand 10 dB
+  above their scatter. The second and third runs tune both TX channels
+  elsewhere first (by 20 MHz, or an octave); TX2's phase over the three runs
+  is reported as rx's retunes are. `HWTEST_2CH_TX=sync` makes only the sync
+  runs (for a campaign: in its environment).
 * The splitter can be resistive or a Wilkinson: every check compares the
   channels with each other, or a channel with itself, never absolute levels.
   The 7 dB between one and two channels is for a resistive splitter: with one
