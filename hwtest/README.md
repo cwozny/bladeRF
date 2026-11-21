@@ -174,7 +174,7 @@ time-out. `bin/bw-diag.sh <image labels>` reproduces it with every Nios packet
 logged and timed (LD_PRELOAD shim `lib/nios-trace.c`). `lib/late-reply.c`
 (LD_PRELOAD) reproduces it deterministically by delaying every Nth RFIC
 status response, e.g. `LATE_REPLY_EVERY=20` with `test_ctrl -T fpga -t
-bandwidth -f`: 17 failures without the fix (b49041c9), none with it.
+bandwidth -f`: 17 failures without the fix (3a768f3d), none with it.
 On the hardware, with the fix the full bandwidth sweep passed with all
 three images (2026-11-13, `HWTEST_TX=1` runs `*-tx-fixes`), and it is no
 slower: traced back to back with the Nios V image, 370 s without the fix and
@@ -510,4 +510,4 @@ went to which port.
 | `bin/bw-diag.sh` | Runs the FPGA-mode bandwidth test with every Nios packet traced (`lib/nios-trace.c`) |
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |
 | `bin/nios-trace-threads.py` | Summarizes a Nios trace of any program: time-outs and what the Nios was busy with, late replies, Nios answer times, how long each RFIC command kept the Nios busy, sample-stream gaps and failed transfers |
-| `lib/gain-readback.c` | Sets 14 RX1 gains in the three RX gain bands and reads them back, RX only (negative gains read back as -2147483648 in FPGA tuning mode without `host-fixes` 2c4fc532) |
+| `lib/gain-readback.c` | Sets 14 RX1 gains in the three RX gain bands and reads them back, RX only (negative gains read back as -2147483648 in FPGA tuning mode without `host-fixes` dc41000f) |

@@ -29,6 +29,12 @@ Raw results are on the test host (XPS 13) under
 `meta.json` (image md5, libbladeRF build, harness commit). `bin/compare.py`
 compares runs.
 
+On 2026-11-21 every commit on these branches was reworded (its AI-attribution
+trailer only: the same trees, authors and dates), so their IDs changed. The IDs
+in this file are the new ones; logs and `meta.json` files written before that
+name the old ones (both IDs: `~/workarea/hwtest-data/commit-map-20261121.txt`
+on the test host).
+
 ## Test setup
 
 **Device under test:** one bladeRF 2.0 micro xA5 (Cyclone V 5CEBA5F23C8),
@@ -80,50 +86,50 @@ receiver sees more than about −20 dBm.
 |---|---|---|---|---|
 | A | Nuand's official FPGA v0.16.0 | (Nuand) | Nios II/e | `be0909dc27b48a08c54db33675130f27` |
 | B | branch `niosv` (work-in-progress commit d984883b, not on the fork), Nios II path (Nuand's design) | Quartus Prime Lite 23.1.1 | Nios II/e | `7ab1c8f913ae8a356de988728ceeb0f7` |
-| C | `niosv` as tested (tag `niosv-tested`) at d5c3c202, Nios V | Quartus Prime Lite 25.1 | Nios V/m, non-pipelined | `b39357947802307a8aa156d5819e721d` |
+| C | `niosv` as tested (tag `niosv-tested`) at b2a2643d, Nios V | Quartus Prime Lite 25.1 | Nios V/m, non-pipelined | `b39357947802307a8aa156d5819e721d` |
 
 B shows that the restructured Qsys script still builds Nuand's Nios II design
 (same fit and timing as A); C is the Quartus 25.1 build the PR is for. The
-commits after C do not change these images: 99f1b2d5 adds a message to
-build_bladerf.sh, 54a2a77a moves the Nios V firmware build into
-`niosv_app.cmake` (the hosted RAM image stays byte-identical), 3cb48e29
-adds the foxhunt firmware and 3cf193b0 updates documentation and two script
+commits after C do not change these images: 5233ad4e adds a message to
+build_bladerf.sh, e60da19b moves the Nios V firmware build into
+`niosv_app.cmake` (the hosted RAM image stays byte-identical), fe4bb32d
+adds the foxhunt firmware and c44a10c0 updates documentation and two script
 messages. For a Nios II build d984883b has the final
 branch's code: what changed after it is the Nios V build, build_bladerf.sh,
 documentation and an `#undef assert` that has no effect on a Nios II build.
 
 The commit IDs in this document are those of the history the tests ran on,
-kept on the fork as tag `niosv-tested` (3cf193b0). Branch `niosv` has the
+kept on the fork as tag `niosv-tested` (c44a10c0). Branch `niosv` has the
 same final tree (`git diff niosv-tested niosv` is empty), arranged as nine
 commits for review:
 
 | `niosv` | Same changes as (`niosv-tested`) |
 |---|---|
-| 09fcd3eb nios: don't register an ISR for a VCTCXO tamer without an IRQ | 303b678a |
-| b4a3fcb5 hdl: bladeRF-micro: add a Nios V/m option to the Qsys system | 443e55fc |
-| f15a2677 nios: let the firmware's assert replace the C library's | faf362d8 |
-| a530479f nios: build the bladeRF 2.0 micro firmware for Nios V with CMake | efe47422, the CMake part of d5c3c202 |
-| 18817772 hdl: build_bladerf.sh: build the bladeRF 2.0 micro with Quartus 25.1 | 7e552fae, 6fa4cf0e, 99f1b2d5, the script part of d5c3c202 |
-| a125c31d doc: Quartus 25.1 and Nios V for the bladeRF 2.0 micro | the documentation in the above and in 3cf193b0 |
-| 5a9eb963 nios: share the Nios V firmware build between applications | 54a2a77a |
-| 31fc2d7f nios: build the foxhunt firmware for Nios V | 3cb48e29 |
-| 820855ee doc: point to niosv_app.cmake for the Nios V compiler flags | part of 3cf193b0 |
+| 3a6c0a83 nios: don't register an ISR for a VCTCXO tamer without an IRQ | d1aabacb |
+| 569e19c3 hdl: bladeRF-micro: add a Nios V/m option to the Qsys system | bb8639fe |
+| eb6b7670 nios: let the firmware's assert replace the C library's | 9db0f794 |
+| d746efac nios: build the bladeRF 2.0 micro firmware for Nios V with CMake | 0a1a284b, the CMake part of b2a2643d |
+| d2c0ad6a hdl: build_bladerf.sh: build the bladeRF 2.0 micro with Quartus 25.1 | 87935623, 0f20fbe9, 5233ad4e, the script part of b2a2643d |
+| 25147134 doc: Quartus 25.1 and Nios V for the bladeRF 2.0 micro | the documentation in the above and in c44a10c0 |
+| 03f3ef81 nios: share the Nios V firmware build between applications | e60da19b |
+| 72f37da8 nios: build the foxhunt firmware for Nios V | fe4bb32d |
+| 73333f55 doc: point to niosv_app.cmake for the Nios V compiler flags | part of c44a10c0 |
 
-Built again from `niosv` (820855ee) with Quartus 25.1 on 2026-11-16,
+Built again from `niosv` (73333f55) with Quartus 25.1 on 2026-11-16,
 hostedxA5 is byte-identical to C (`b39357947802307a8aa156d5819e721d`).
 
 For a second board, an xA9 (Cyclone V 5CEBA9; `HWTEST_FPGA=A9`, images in
 `images-xA9/`), the same three were built as hostedxA9 on 2026-11-17: A
 `1ab3bc8bdcf16a5f0ddf3fcdbaa6556b` (Nuand's), B
 `3c7e86602829af36f29c7e2165e14883` (d984883b, 23.1.1) and C
-`fd73509cc7444ec1db0af6efb3482728` (820855ee, 25.1).
+`fd73509cc7444ec1db0af6efb3482728` (73333f55, 25.1).
 
 ## libbladeRF builds
 
 | Name | Source | Used for |
 |---|---|---|
 | main | Nuand master 35174c30 plus this harness (branch `hwtest`, which also carries the test_scheduled_retune fix) | baseline: what Nuand's users have |
-| fixes | main plus the four libbladeRF fixes of branch `host-fixes` (b49041c9, 53632d98, 16eadeb5, cd405004); built from the earlier branch `fixes` at 3b60e59e, whose libbladeRF is identical | verifying the fixes |
+| fixes | main plus the four libbladeRF fixes of branch `host-fixes` (3a768f3d, 2ac75f37, dbad1e70, e64e4026); built from the earlier branch `fixes` at 3b60e59e, whose libbladeRF is identical | verifying the fixes |
 
 The fixes build was deleted after use (2026-11-13); to rebuild it, make a
 detached worktree of `hwtest`, cherry-pick those four commits and run
@@ -185,8 +191,8 @@ image B. The same holds for the xA9: hostedxA9 built from fpga_v0.16.0
 
 The Nios V/m takes 1,111 more ALMs (and 1,778 more registers) than the
 Nios II/e on the xA5. B's fit and timing are identical to A's (same Fmax for
-every clock). The hostedxA9 C row is the build from 99f1b2d5 (2026-11-13);
-built again from 820855ee on 2026-11-17 it is byte-identical
+every clock). The hostedxA9 C row is the build from 5233ad4e (2026-11-13);
+built again from 73333f55 on 2026-11-17 it is byte-identical
 (`fd73509cc7444ec1db0af6efb3482728`).
 
 The FPGA's whole RX/TX sample logic (FIFOs, metadata, loopback) runs on the
@@ -212,7 +218,7 @@ libbladeRF main, antennas attached, no transmitting. 14 runs, all completed:
 
 - smoke + host + fpga: A, B and C 50/50 in each of three rounds;
 - deep: A 5/6, B 5/6, C 6/6 (the failures: the full bandwidth sweep, the
-  stale-reply bug fixed by b49041c9 below);
+  stale-reply bug fixed by 3a768f3d below);
 - soak: C 150 minutes after one image load, 938/938; A 90 minutes, 534/534;
 - `compare.py`: no differences between the images beyond timing noise. C is
   faster on Nios-bound work (FPGA-mode sweeps: frequency 405 s vs 487 s,
@@ -255,7 +261,7 @@ At 5.8 GHz the bladeRF TX tone measured −57.2 to −58.0 dBFS on all images.
 
 ### 7. Sample formats, overclocking, triggers, full-rate soak (night of 2026-11-13/14)
 
-libbladeRF main, `HWTEST_TX=1`, harness 0821988d (job `newtests`, plan
+libbladeRF main, `HWTEST_TX=1`, harness 05aa45f9 (job `newtests`, plan
 `plans/new-20261114.txt`; results `results/{A,B,C}-new/`). Tools: see
 README.md, "Sample formats, overclocking, triggers".
 
@@ -297,7 +303,7 @@ The two-channel SC16 loopback loses samples on every image, Nuand's
 included (a limit of the FPGA's loopback path, not of these changes). The
 single errors at the higher rates were a few samples lost at a fixed point
 ~78,000 samples after the start, on every image; the loopback check now skips
-the first 0.25 s (0c7f2915) and was run again (below).
+the first 0.25 s (db9b74f1) and was run again (below).
 
 The digital loopback does not run at the sample rate that is set: with
 loopback enabled the FPGA requests TX samples on every `tx_clock` cycle
@@ -335,7 +341,7 @@ those rates, but not the sample clock.
   on all three images (e.g. 1 µs / 10 µs sent: 1.019–1.022 µs / 10.002 µs
   measured, 24,995–24,996 pulses of 24,996; PRI within 1 ppm). The cases
   failed only on the carrier check, which my phase-step estimate got wrong
-  (fixed in 0c7f2915, re-run below).
+  (fixed in db9b74f1, re-run below).
 - **SC8 meta at 122.88 Msps fails on C only:** overrun flags within seconds,
   timestamp jumps, then the stream stalls ("Transfer timed out"), in both
   tuning modes, while A and B ran 20 s (2.46 G samples) clean. Without
@@ -382,7 +388,7 @@ streamed (2R2T framing: four DATA_CLK cycles per sample, see
 rate: 245.76 MHz at 61.44 Msps, where bladerf.sdc and the LVDS receiver
 (altlvds_rx: 250 MHz, 500 Mbps per lane) are set up for 250 MHz.
 
-**First runs** (`diag-bist/1114-0533`, A and C, harness 00e2b143), all pass
+**First runs** (`diag-bist/1114-0533`, A and C, harness f4caf4e2), all pass
 on both images with no bad sample:
 
 | Case | Samples checked per channel |
@@ -442,7 +448,7 @@ transmitted; the first 1 M samples skipped):
 
 The same corruption as with the harness, on Nuand's image as on C.
 
-**BIST campaign** (`bist` phase, harness 53394f98; results
+**BIST campaign** (`bist` phase, harness 180f7301; results
 `results/{A,B,C}-bist/`): every case at the design rate passes on A, B and C
 with no bad sample:
 
@@ -474,7 +480,7 @@ runs: RX1 40 bad samples on C, 14,823 on A; RX2 garbage on both.
 ### 9. Repeats with the current harness; how far overclocking goes (2026-11-14 morning)
 
 **Rerun of the format, overclock and trigger phases** (job `morning2`, harness
-53394f98, results `results/{A,B,C}-new2/`): the same results as in section 7
+180f7301, results `results/{A,B,C}-new2/`): the same results as in section 7
 on all three images, with the fixed checks. All 15 full-rate receive and all
 15 transmit cases pass (10 each in host tuning mode, 5 in FPGA tuning mode);
 the loopback fails only for two channels in SC16 (every
@@ -528,7 +534,7 @@ frequency; on 1 µs pulses the estimate reads 9.5 kHz high on every image
 (the 1 µs averaging window is as long as the pulse), so the check now
 measures the carrier only on pulses of 3 µs or more, and leaves out the
 first and last pulse of a capture (a pulse cut off by the capture's start
-gave the single PW/PRI misfits). Re-analysed with those fixes (da525f1a),
+gave the single PW/PRI misfits). Re-analysed with those fixes (e7fa951a),
 every saved capture passes.
 
 **Noise floor**, from the pulse captures (nothing transmitted, SC8, RX gain
@@ -622,8 +628,8 @@ buffers hold at that rate. More buffers would absorb both.
 
 ### 11. The micro's other revisions: wlan, adsb, foxhunt (builds, 2026-11-14)
 
-Built with Quartus Prime Lite 25.1 (Nios V) from `niosv`, at 99f1b2d5 (wlan,
-adsb) and 3cb48e29 (foxhunt), with Nuand's code (master 35174c30) built with
+Built with Quartus Prime Lite 25.1 (Nios V) from `niosv`, at 5233ad4e (wlan,
+adsb) and fe4bb32d (foxhunt), with Nuand's code (master 35174c30) built with
 23.1.1 (Nios II) as the reference, same fitter seed:
 
 | Revision | Build | Logic | Worst setup | Worst recovery |
@@ -633,8 +639,8 @@ adsb) and 3cb48e29 (foxhunt), with Nuand's code (master 35174c30) built with
 | adsb xA4 | Nuand + adsb fix, 23.1.1 | 15,884 ALMs (86 %) | −2.814 ns | +0.914 ns |
 | adsb xA4 / xA5 / xA9 | ours + adsb fix, 25.1 | 16,433 (89 %) / 16,735 (58 %) / 16,718 (15 %) | −1.737 / −2.526 / −1.938 ns | +0.526 / +0.990 / +0.073 ns |
 | foxhunt xA4 | Nuand, 23.1.1, Nios II | 5,614 ALMs (30 %) | +1.438 ns | +3.208 ns |
-| foxhunt xA4 | niosv 3cb48e29, 23.1.1, Nios II | identical to Nuand's | | |
-| foxhunt xA4 / xA9 / xA5 | niosv 3cb48e29, 25.1, Nios V | 6,667 (36 %) / 6,641 (6 %) / 6,645 (23 %) | +1.046 / +0.427 / −0.012 ns | +3.866 / +4.004 / +3.348 ns |
+| foxhunt xA4 | niosv fe4bb32d, 23.1.1, Nios II | identical to Nuand's | | |
+| foxhunt xA4 / xA9 / xA5 | niosv fe4bb32d, 25.1, Nios V | 6,667 (36 %) / 6,641 (6 %) / 6,645 (23 %) | +1.046 / +0.427 / −0.012 ns | +3.866 / +4.004 / +3.348 ns |
 
 - **wlan** needs Nuand/bladeRF-wiphy (8623814) next to the bladeRF tree and
   its IP generated (`fpga/ip/generate.sh`): the FFT and Viterbi cores
@@ -666,10 +672,10 @@ before the load and decodes the Morse code. Nuand's foxhunt firmware
 transmits on TX1, which the bench terminates, and switches on the TX bias
 tee, which would put DC on the cabled port, so both images under test were
 built with `setup/foxhunt-tx2.patch` (TX2, through 20 dB to the B200mini;
-bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv 3cb48e29
+bias tee off): N2 = Nuand master + patch, 23.1.1, Nios II; V = niosv fe4bb32d
 + patch, 25.1, Nios V. Job `after7` and a trial run
 (`foxhunt/1114-1714`, `foxhunt/trial-1114-1647`; numbers from
-`--analyze` of the saved captures, harness 1d7a0e63):
+`--analyze` of the saved captures, harness 1657f494):
 
 | Run | Messages decoded | Dot | Tone from carrier | Tone level | TX on per message | TX off | Message period |
 |---|---|---|---|---|---|---|---|
@@ -705,10 +711,10 @@ Every earlier RF test used channel 2. For these runs the two B200mini cables
 moved to channel 1 (TX1 → 20 dB → B200mini RX2, B200mini TX/RX → 20 dB →
 RX1, loads on TX2 and RX2) and `HWTEST_RF_CH=1` made the RF scripts use RX1
 and TX1: libbladeRF main, both tuning modes, images A and C. Campaign `ch1`
-(harness 4531099e, `results/{A,C}-ch1/`: phases rf, formats, oc), repeats of
+(harness 3e48329e, `results/{A,C}-ch1/`: phases rf, formats, oc), repeats of
 its two single failures (`results/ch1-repeat-1115-0834/`), a repro of one
 of them (`results/tx433-1115-0849/`), and the RF tests again with the
-corrected harness (feeb443d, `results/{A,C}-ch1b/`; the digital tests,
+corrected harness (14642e9e, `results/{A,C}-ch1b/`; the digital tests,
 which do not depend on the cabling, skipped).
 
 **C against A on channel 1: the same as on channel 2.**
@@ -764,7 +770,7 @@ the start of each bladeRF transmission, up to about 0.7 s long; the B200mini
 reported its receiver locked throughout, and all 666 captures after them
 read the tone normally, at the same frequency. The cause was not
 investigated. rf-check.py, pulse-check.py and twoch-check.py now measure a
-transmission 1 s after its signal first appears (`TX_SETTLE_S`, feeb443d);
+transmission 1 s after its signal first appears (`TX_SETTLE_S`, 14642e9e);
 before, a measurement could land in the bursts.
 
 ### 14. Nuand's threads test as Nuand runs it, and what made it fail (2026-11-15 to 17)
@@ -777,8 +783,8 @@ preload, no TX cap and no time limit (`HWTEST_TX_UNCAPPED_OK=1`; TX1 ->
 20 dB -> 20 dB -> B200mini RX2, the other ports on 50 ohm loads). `FAST=1`
 runs the checklist's fast variant (`-f`); `TRACE=1` records every Nios
 request and response (`lib/nios-trace.c`, analysed by
-`bin/nios-trace-threads.py`; since 8a29b565 also the frequency calls and
-the sample transfers; c65f0630 moved its logging to a ring buffer and a
+`bin/nios-trace-threads.py`; since 153e9563 also the frequency calls and
+the sample transfers; 1d302c3a moved its logging to a ring buffer and a
 writer thread, to disturb the threads' timing less: checked with its
 self-test, 1 million records, and receive runs in both tuning modes,
 nothing dropped, but not yet used for a threads run). The FPGA images and
@@ -822,24 +828,24 @@ libbladeRF waits for a command by polling the Nios's work queue
 (`_rfic_fpga_spinwait()`) and counts a poll that timed out as not done, so it
 polls again and the command completes. That is harmless as long as the late
 reply to the timed-out poll is not taken as the answer to a later request
-(b49041c9) and no other request goes out meanwhile (92aef966). A 1 s
+(3a768f3d) and no other request goes out meanwhile (06962e80). A 1 s
 time-out was tried and dropped: with 250 ms and the fixes, 308
 status polls timed out in a run on A, the 13 late replies were discarded,
 and the test passed (table).
 
 **What made it fail.** All in the host software:
 
-- b49041c9: late replies were taken as the answer to the next request.
-- 92aef966: `bladerf_get_gain_range()` and `bladerf_get_gain_stage_range()`
+- 3a768f3d: late replies were taken as the answer to the next request.
+- 06962e80: `bladerf_get_gain_range()` and `bladerf_get_gain_stage_range()`
   sent Nios requests without the device lock. The gain thread's lookups
   went out while another thread's request was unanswered: once in 10,935
   requests and 3 times in 852,185 without the lock, never in 5.8 million
   with it. Twice the other request, a configuration-register read, was
   never answered.
-- 2c4fc532: negative RX gains read back as -2147483648 in FPGA tuning mode.
-- 672266e6 (test): the control threads started before the streams had
+- dc41000f: negative RX gains read back as -2147483648 in FPGA tuning mode.
+- 378b9909 (test): the control threads started before the streams had
   enabled RX and TX.
-- eab40910 (test): gain readbacks were checked against the 420 MHz gain
+- 15299a8b (test): gain readbacks were checked against the 420 MHz gain
   range while the frequency thread had moved the channel to another band.
 
 **Fast variant, traced, with the fixes** (`trace-*-1116-*`; time-outs are
@@ -847,18 +853,18 @@ status polls that got no reply in time, all retried):
 
 | Build | Image | Result | Failures | Requests | Time-outs | Late replies discarded | Notes |
 |---|---|---|---|---|---|---|---|
-| host-fixes + 92aef966, 1 s | A | fail | 163 | 852,040 | 0 | 0 | 141 readbacks of 60 while RX was not yet enabled, 22 of -2147483648 |
-| host-fixes + 92aef966, 1 s | C | fail | 47,995 | 833,260 | 0 | 0 | RX stream started 45 s after TX; both streams timed out, RX disabled for the rest |
+| host-fixes + 06962e80, 1 s | A | fail | 163 | 852,040 | 0 | 0 | 141 readbacks of 60 while RX was not yet enabled, 22 of -2147483648 |
+| host-fixes + 06962e80, 1 s | C | fail | 47,995 | 833,260 | 0 | 0 | RX stream started 45 s after TX; both streams timed out, RX disabled for the rest |
 | Nuand's + 1 s | A | fail | 48,660 | 852,185 | 2 | - | 3 requests sent while another was unanswered, 2 never answered |
-| above + 2c4fc532 + 672266e6, 1 s | A | FX3 hung at 498 s | 3 before the hang | 731,259 | 0 before the hang | 0 before the hang | the 3: readback at a band's minimum gain (eab40910) |
+| above + dc41000f + 378b9909, 1 s | A | FX3 hung at 498 s | 3 before the hang | 731,259 | 0 before the hang | 0 before the hang | the 3: readback at a band's minimum gain (15299a8b) |
 | all fixes, 1 s | C | pass | 0 | 1,025,375 | 0 | 0 | |
 | all fixes, 1 s | A | pass | 0 | 1,025,353 | 0 | 0 | |
 | all fixes, 250 ms | C | pass | 0 | 1,025,145 | 1 | 0 | during RFIC initialization |
 | all fixes, 250 ms | A | pass | 0 | 1,025,670 | 308 | 13 | 307 during bandwidth changes, 1 during initialization |
 
-"All fixes" is `host-fixes`' libbladeRF (b49041c9, 53632d98, 16eadeb5,
-cd405004, 92aef966, 2c4fc532) with its test_ctrl fixes 672266e6 and
-eab40910; the runs used the same changes under earlier commit IDs.
+"All fixes" is `host-fixes`' libbladeRF (3a768f3d, 2ac75f37, dbad1e70,
+e64e4026, 06962e80, dc41000f) with its test_ctrl fixes 378b9909 and
+15299a8b; the runs used the same changes under earlier commit IDs.
 
 **Full variant with all fixes and 250 ms** (`full-keep250-1116-0840`,
 untraced; the variant Nuand's checklist runs):
@@ -925,7 +931,7 @@ untraced full runs there, A and C in turn, with all fixes and 250 ms
 In these 13.8 h no stream stopped, no RFIC command timed out and the FX3
 always answered. Behind the hub the runs with the fixes had stopped 3 times
 in 8.1 h on 2026-11-16 (from the 07:22 run in the table on, which lacked
-eab40910; a run that stopped counted up to its stop): the FX3 at 07:30 (A)
+15299a8b; a run that stopped counted up to its stop): the FX3 at 07:30 (A)
 and at 16:11 (C), and the streams of the full run on A. If the hub made no
 difference, all three stops would fall in the hub's hours with a
 probability of (8.1/21.9)^3, about 0.05. The move also changed the
@@ -937,7 +943,7 @@ the hub or its power but does not separate them.
 back on RX1 at 420 MHz, 2 GHz and 5 GHz): with Nuand's libbladeRF in FPGA
 tuning mode the 5 gains with a negative full-stage value read back as
 -2147483648, on A and on C; host tuning mode reads all 14 correctly; with
-2c4fc532 all 14 are correct in both modes on both images.
+dc41000f all 14 are correct in both modes on both images.
 
 **Not explained: the FX3 stopped answering**, four times, always behind the
 hub. Three times on A: on 2026-11-13 (25 s into a capped run), on 2026-11-15
@@ -963,7 +969,7 @@ xA5 and on an xA9 (`plans/unit-xA5-20261117.txt`, `unit-xA9-20261118.txt`):
 smoke, host, fpga, formats, oc, trigger, sched and bist on A, B and C, then
 deep, fullsoak and soak on A and C. The bladeRF on its own USB-C port (2-3),
 the B200mini off USB, the last cabling row, `HWTEST_TX=1`, libbladeRF and
-tests of `host-fixes` (eab40910) with `HWTEST_FIXES=1`; the tests that need
+tests of `host-fixes` (15299a8b) with `HWTEST_FIXES=1`; the tests that need
 the B200mini (fmt_txrf, oc_pulse) and ctrl_threads-fpga left out (results
 `results/xA5-*-u1*/`, 12:59 to 23:16):
 
@@ -986,7 +992,7 @@ Every failure is one seen before, or gave no result:
 | rx_meta, two channels, host tuning mode: "Requested timestamp is in the past" (the case of open item 1, 16 ms of slack) | 1 | | |
 
 New in this run: the formats phase with two channels in FPGA tuning mode
-(with `HWTEST_FIXES=1` only, as that needs 53632d98). Full-rate receive in
+(with `HWTEST_FIXES=1` only, as that needs 2ac75f37). Full-rate receive in
 all five formats and the SC8 loopback pass on A, B and C; the SC16 loopback
 fails as in host tuning mode.
 
@@ -1110,8 +1116,8 @@ The xA9 on the same port and cabling (the last cabling row: TX1 through
 
 **The FX3 endpoint-NAK fix on Linux** (`results/nak-linux-20261119-0628*`;
 the user approved writing the test firmware and restoring the official one).
-The 2.6.0 + NAK image tested on the MacBook Air (fork `fx3-epnak`, 8d886dbc,
-SDK 1.3.3 libraries, md5 1a179190…, version 2.6.0-epnak-8d886dbc) was written
+The 2.6.0 + NAK image tested on the MacBook Air (fork `fx3-epnak`, 46fa04d1,
+SDK 1.3.3 libraries, md5 1a179190…, version 2.6.0-epnak-46fa04d1) was written
 to the flash's firmware area with `bladeRF-cli -f` (3 erase blocks, 484 pages,
 read back and compared), the FX3 rebooted from the flash
 (`bladerf_device_reset`) and the FPGA autoloaded as usual. Then:
@@ -1121,7 +1127,7 @@ read back and compared), the FX3 rebooted from the flash
   runs of `rx2order` after 3 good-order ones: no lockup in 80 starts (the
   official 2.6.0 locked up on the 6th the night before). Every stream still
   stopped after at most one buffer: that is libbladeRF's part (open item 10,
-  fixed on `host-fixes` by 53632d98).
+  fixed on `host-fixes` by 2ac75f37).
 - normal use: section 16's run 1 again (A, smoke to bist): 143 tests, 5
   failed, the three that fail everywhere (fmt_loop SC16 x2 4M in both modes,
   bist_oc 122.88 Msps) and two known noise cases (rx_meta_8bit_mimo-host, an
@@ -1192,7 +1198,7 @@ counter dropped to 61.44 Msps: in 1R1T the AD9361 halves DATA_CLK to
 
 **The other revisions with Nios V** (`results/revs-smoke-20261119-084339`,
 receive only). wlan built from master with Quartus 23.1.1 (Nios II) and from
-`niosv` (99f1b2d5) with 25.1 (Nios V), each: loaded, versions read,
+`niosv` (5233ad4e) with 25.1 (Nios V), each: loaded, versions read,
 frequency, sample rate and bandwidth set and read back in FPGA and in host
 tuning mode, and an RX1 capture of 80,000,000 bytes of 80,000,000 in both
 modes, the same on both images. adsb built from `niosv` (Nios V): loaded,
@@ -1211,8 +1217,8 @@ own port. A passed in 7,915 s and C in 7,387 s, each with a failure count of
 
 **The endpoint-NAK fix rebased onto master** (`results/nak-master-20261119-105833`;
 the user approved writing the test firmware and restoring the official one).
-`fx3-epnak-master` (4c24c1c7, FX3 2.6.1 + the NAK change), built like the
-official image (version 2.6.1-epnak-4c24c1c7, md5 0e43774a…), written and
+`fx3-epnak-master` (6aca76fd, FX3 2.6.1 + the NAK change), built like the
+official image (version 2.6.1-epnak-6aca76fd, md5 0e43774a…), written and
 tested as above: no lockup in 80 starts of the trigger (20 each with A, C and
 B, 20 bad-order `rx2order` runs); section 16's run 1 again: 143 tests and the
 same 5 failures as with the official firmware; the official 2.6.0 written
@@ -1337,7 +1343,7 @@ Results, each run right after an FPGA load (TX gain 0 dB, 915 MHz):
 | Image | status, 20 frames | control (`-n`) | loop mode | status, 64 frames, every rate, 1000 bytes |
 |---|---|---|---|---|
 | wlan, Nuand's code, Quartus 23.1.1 (Nios II) | 1 report (frame 0), 19 missing | pass | 0 back (expected) | 1 report (frame 0), 63 missing |
-| wlan, `niosv` 99f1b2d5, Quartus 25.1 (Nios V) | 1 report (frame 0), 19 missing | pass | 0 back (expected) | 1 report (frame 0), 63 missing |
+| wlan, `niosv` 5233ad4e, Quartus 25.1 (Nios V) | 1 report (frame 0), 19 missing | pass | 0 back (expected) | 1 report (frame 0), 63 missing |
 
 Both images behave the same, so this is not the Nios V port. It is the
 pattern `wiphy-loop.md` (section 5) predicted from the code for 950189d2
@@ -1449,7 +1455,7 @@ overclocked; the campaign's `rx_order` (SC16, 61.44 Msps, 10 starts per run)
 found a late buffer in 3 to 8 of 10 starts in every run, with every image
 and either build. That is libbladeRF's start-up reordering (section 7's
 `rx_order`; upstream draft I9), which rxcheck skips with its 0.25 s warm-up.
-rxcap now warms up the same way (40626924). The six runs again with it
+rxcap now warms up the same way (2d8f306a). The six runs again with it
 (`plans/ocrx2-xA9-20261120.txt`, job script `xa9-ocrx2.sh`, results
 `results/xA9-{A,B,C}-ocrx2{,-fixes}/`; the patched hwtest-stream built on
 its own and given to pulse-check.py with `HWTEST_STREAM`): all 36
@@ -1525,7 +1531,7 @@ each, receive only, job scripts `b200-start.py` and `b200-start2.py`), and
 at 30.72 Msps (no decimation) the first 10 samples are zero. At 20 Msps the
 dip is at samples 12 to 16, where this capture's gap was. Every B200mini
 capture of the harness goes through rf-check's `b200_capture`, which now
-drops the first 32 samples (d000776b). With that, no dip is left at any of
+drops the first 32 samples (78bd1f5a). With that, no dip is left at any of
 those rates, the failed capture passes when judged again, and oc-tx (3 of 3
 cases) and rf-check (every point) pass on A. Without that failure, C failed
 1 of 96 overclocked transmit cases over both channels (the false pulses
@@ -1549,7 +1555,7 @@ failed on one check: the fractional-lag fit found 23 coherent bins, and it
 needs 64. Over the chirp's band the two channels' coherence had a median of
 0.68: the chirp reaches the bladeRF about 30 dB weaker there than at
 433 MHz. The cross-correlation's own estimate of the lag was +0.006
-samples, and the other checks passed. 01bf87da raises the B200mini's TX
+samples, and the other checks passed. 6a3c3f43 raises the B200mini's TX
 gain at 5.8 GHz from 50 to 60 dB (its cap is 65) and changes no analysis
 and no limit. Then (21:57 to 22:05, no stop) the pre-check and all six runs
 passed: images C, A and B, with Nuand's libbladeRF in host tuning mode and
@@ -1658,7 +1664,7 @@ each, 65 pass, no retries; each run 8 minutes. The ranges over all of them:
   channels, A, B and C the same, C's one overclocked transmit failure in 96
   cases within chance). The xA4 was built only.
 
-#### 09fcd3eb (tested as 303b678a) nios: don't register an ISR for a VCTCXO tamer without an IRQ
+#### 3a6c0a83 (tested as d1aabacb) nios: don't register an ISR for a VCTCXO tamer without an IRQ
 
 - On the micro, `VCTCXO_TAMER_0_IRQ` is −1, and `alt_ic_isr_register()`
   stores the handler in `alt_irq[-1]`, the 8 bytes before the table. Found by
@@ -1672,20 +1678,20 @@ each, 65 pass, no retries; each run 8 minutes. The ranges over all of them:
 - Images B and C have the change and pass everything A passes (sections 3 to
   7).
 
-#### f15a2677 (tested as faf362d8) nios: let the firmware's assert replace the C library's
+#### eb6b7670 (tested as 9db0f794) nios: let the firmware's assert replace the C library's
 
 - Needed for the Nios V build only: newlib-nano's headers include
   `<assert.h>`, so the firmware's own `assert` is a redefinition, which
   `-Werror` turns into an error. A Nios II build is unchanged.
 
-#### 5a9eb963, 31fc2d7f (tested as 54a2a77a, 3cb48e29): share the Nios V firmware build; build the foxhunt firmware for Nios V
+#### 03f3ef81, 72f37da8 (tested as e60da19b, fe4bb32d): share the Nios V firmware build; build the foxhunt firmware for Nios V
 
-- 54a2a77a moves the application-independent part of the Nios V firmware
+- e60da19b moves the application-independent part of the Nios V firmware
   build into `niosv_app.cmake`: the hosted revision's RAM image is
   byte-identical before and after (xA4, Quartus 25.1,
   `nios_system_ram.hex` md5 57a32993323672674ee56998429aa8f4), also when
   built inside the foxhunt revision.
-- 3cb48e29: foxhunt builds with Quartus 25.1 for xA4, xA5 and xA9 (section
+- fe4bb32d: foxhunt builds with Quartus 25.1 for xA4, xA5 and xA9 (section
   11); its Nios V firmware is 82.6 KB, 43.0 KB of the RAM left. With
   Quartus 23.1.1 the branch still builds foxhunt with Nios II exactly as
   Nuand's code does (same Qsys system, fit and timing).
@@ -1698,14 +1704,14 @@ each, 65 pass, no retries; each run 8 minutes. The ranges over all of them:
 These problems do not depend on the Nios V port. The tests ran on the earlier
 branch `fixes`, which also had the VCTCXO tamer fix; `host-fixes` has the
 same commits without it, with the same libbladeRF code: 7eabdcb3, e9463ba9,
-fdb03b4e and 3b60e59e there are 2483428a, 53632d98, 16eadeb5 and cd405004
+fdb03b4e and 3b60e59e there are a91e9fd9, 2ac75f37, dbad1e70 and e64e4026
 here.
 
 For the pull requests each fix also has its own branch from master (`pr/*`;
-2483428a is split into a tune-order and a buffer-count change), and each was
+a91e9fd9 is split into a tune-order and a buffer-count change), and each was
 checked alone against master on the xA9 (section 17, "Each fix alone").
 
-#### b49041c9 libbladeRF: discard stale Nios responses
+#### 3a768f3d libbladeRF: discard stale Nios responses
 
 - Symptom: `test_ctrl -T fpga -t bandwidth` (full sweep) fails 2 to 25 times
   per run with images A and B ("Unexpected bandwidth ... actual=3").
@@ -1719,25 +1725,25 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   slower: 370.5 s without and 376.8 s with the fix, traced back to back
   (`results/bw-diag/20261113-161738`, `-162354`).
 
-#### 53632d98 libbladeRF: enable both channels of a MIMO layout in FPGA tuning mode too
+#### 2ac75f37 libbladeRF: enable both channels of a MIMO layout in FPGA tuning mode too
 
 - Without the fix, `test_rx_meta -m` and `-b 8 -m` fail in FPGA tuning mode
   with every image (A, B, C); with it they pass on all three (sections 4, 6).
 
-#### 16eadeb5 libbladeRF: initialize the RFIC again after an FPGA load in host tuning mode
+#### dbad1e70 libbladeRF: initialize the RFIC again after an FPGA load in host tuning mode
 
 - Without the fix, `test_fpga_load` fails in host tuning mode with every image
   ("Calibration TIMEOUT"); with it, it passes on A, B and C (section 6,
   fpga_load-host), and in FPGA tuning mode as before.
 
-#### cd405004 libbladeRF: host tuning mode: MIMO enable uses the layout of the channel's direction
+#### e64e4026 libbladeRF: host tuning mode: MIMO enable uses the layout of the channel's direction
 
 - bladeRF-cli receives 3 s on RX1+RX2 at 5 Msps while TX1 sends 0.2 s:
   without the fix the receive stops when the transmit ends (2,228,224 of
   30,000,000 samples); with it all 30,000,000 samples arrive, in both tuning
   modes (rx2_txtoggle-host/-fpga, section 6, on A, B and C).
 
-#### 2483428a test_scheduled_retune: tune before reading the start timestamp; 64 RX buffers
+#### a91e9fd9 test_scheduled_retune: tune before reading the start timestamp; 64 RX buffers
 
 - Before: "Requested timestamp is in the past" with the official image. After:
   passes in every run since, all images, both tuning modes, e.g. 135 times in
@@ -1749,7 +1755,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   ("Requested timestamp is in the past", from the third iteration on; A 40
   of 60, C 32 of 60), with 64 buffers none of 120.
 
-#### 92aef966 libbladeRF: lock the device while looking up gain ranges
+#### 06962e80 libbladeRF: lock the device while looking up gain ranges
 
 - Symptom: in `test_ctrl -T fpga -t threads`, Nios requests that are never
   answered, and replies taken by the wrong request.
@@ -1760,7 +1766,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   other request was never answered.
 - With the fix: no such overlap in 5.8 million requests (six runs, A and C).
 
-#### 2c4fc532 libbladeRF: bladeRF 2.0 FPGA tuning mode: sign-extend RX gain readbacks
+#### dc41000f libbladeRF: bladeRF 2.0 FPGA tuning mode: sign-extend RX gain readbacks
 
 - Symptom: `bladerf_get_gain()` returns -2147483648 for RX gains whose
   full-stage value is negative (above 1.3 GHz), in FPGA tuning mode only.
@@ -1768,7 +1774,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   C with Nuand's libbladeRF, 0 in host tuning mode; with the fix 0 of 14 in
   both modes on both images (section 14).
 
-#### 672266e6 test_ctrl: threads: start the control threads once both streams run
+#### 378b9909 test_ctrl: threads: start the control threads once both streams run
 
 - Symptom: wrong RX gain readbacks at the start of the run (141 reading 60),
   or for the whole run when the streams start too late and time out
@@ -1776,7 +1782,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 - With the fix the streams start before the control threads in every run
   since (section 14).
 
-#### eab40910 test_ctrl: gain: check readbacks against the range the gain is clamped to
+#### 15299a8b test_ctrl: gain: check readbacks against the range the gain is clamped to
 
 - Symptom: "Erroneous overall gain readback=-15, expected=-16" (or -12) when
   the frequency thread has moved the channel to a band with a higher minimum
@@ -1787,19 +1793,19 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   the frequency fixed, the gains are within the range and the check is the
   same.
 
-#### adsb-fix f75850cf, 610ad6e2: tie off fifo_writer's highly_packed_mode_en; size the 12-bit packing buffer from the FIFO width
+#### adsb-fix 14616827, 58d1c2c8: tie off fifo_writer's highly_packed_mode_en; size the 12-bit packing buffer from the FIFO width
 
 - Nuand's master does not build the adsb revision (since 2025.05, with
   Quartus 23.1.1 too): rx-adsb.vhd leaves fifo_writer's new
   `highly_packed_mode_en` port open ("Error (10346) ... must have actual or
-  default value"; f75850cf ties it low), and fifo_writer's 96-bit packing
+  default value"; 14616827 ties it low), and fifo_writer's 96-bit packing
   buffer is narrower than the adsb revision's 128-bit sample FIFO ("Error
   (10393) ... fifo_writer.vhd(567): left bound (127) of slice must belong to
-  range (95 downto 0)"; 610ad6e2 sizes it FIFO_DATA_WIDTH + 32 bits, still
+  range (95 downto 0)"; 58d1c2c8 sizes it FIFO_DATA_WIDTH + 32 bits, still
   96 for the other revisions).
 - With both, adsb builds: Nuand's code with Quartus 23.1.1 (xA4) and `niosv`
   with 25.1 (xA4, xA5, xA9) (section 11).
-- The branch itself, built alone (2026-11-19, `adsb-fix` 610ad6e2 with
+- The branch itself, built alone (2026-11-19, `adsb-fix` 58d1c2c8 with
   Nuand/bladeRF-adsb 40b7599, Quartus 23.1.1): adsbxA4 15,884 ALMs (86 %),
   worst setup −2.814 ns, byte-identical to the 2026-11-14 build of master
   with the two changes as a patch (md5 f7181684…); adsbxA9 15,838 ALMs
@@ -1877,7 +1883,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     order makes Nuand's libbladeRF reset the receive endpoint while the
     stream's transfers are queued. FX3 firmware 2.6.0 then locked up in 4
     of 14 runs, on every FPGA image, and on Linux on the 6th run (the XPS,
-    section 16). Branch `fx3-epnak` (8d886dbc: NAK the endpoint around the
+    section 16). Branch `fx3-epnak` (46fa04d1: NAK the endpoint around the
     reset, as the FX3 SDK's examples do) locked up in 0 of 40 on the MacBook
     Air, and a 10-minute soak of normal use with it passed. On Linux
     (section 17) it locked up in 0 of 80, and so did the same change
@@ -1896,10 +1902,10 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     build after a write. A lead: 1.3.5 changed `CyU3PSpiTransmitWords()`,
     which flash writes use (a data-corruption fix, and
     `CyU3PSpiSetTxFlushWaitPeriod()` added). To reproduce: run a
-    1.3.5-library build (`fx3-epnak` at de2d1071, or 09c82087 with "1.3.5";
+    1.3.5-library build (`fx3-epnak` at 8a0ff54e, or 09c82087 with "1.3.5";
     images in `results/xA9-mba/fx3/`), write a flash region, then open the
     device without `BLADERF_FORCE_NO_FPGA_PRESENT`. Testing writes a board's
-    flash, so ask first. `fx3-epnak` reverts the switch (adcb5210), so the
+    flash, so ask first. `fx3-epnak` reverts the switch (6e06b1d6), so the
     fork stays on the 1.3.3 libraries for now. The SDK packages, their
     release notes as text and the library-matching tool are in
     `~/workarea/fx3-sdk/` and `~/workarea/builds/scripts/fx3libmatch.py` on
