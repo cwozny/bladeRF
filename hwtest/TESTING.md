@@ -1789,6 +1789,63 @@ pass. Board and paths as for the xA9 above:
   sample at most); on the xA9 0.004 at most. A property of this board,
   more than 20 times below the quarter-sample limit.
 
+### 20. A failed flash page read; the bandwidth sweep in host tuning mode (2026-11-21)
+
+Two checks that the issue texts needed (I18 came from reading the code only;
+I1 named no workaround). The xA5 with the official image (A) loaded first,
+receive-only (the no-TX guard preloaded), job `xa5v4v12`, results
+`results/xa5v4v12-20261121-153432/`.
+
+**A failed flash page read (I18, P18).** `lib/flash-read-fail.c` makes the
+first read of page 100 fail in one of three ways: the firmware's status
+reads back as -1 (status), the FLASH_READ request fails (cmd), or the page
+buffer read fails (buffer). `bladeRF-cli -e "flash_backup <file> fw"` reads
+pages 0 to 767 (the FX3 firmware region), with the master and P18 builds of
+section 17 ("Each fix alone"). The shim refuses every request that could
+write the flash; it refused none.
+
+| Build | Failure | bladeRF-cli prints | Backup file |
+|---|---|---|---|
+| master | none | - | saved |
+| master | status | "Firmware page read (op=100) failed at page 100: -1" | saved; pages 100-767 all zeros |
+| master | cmd | nothing | saved; pages 100-767 all zeros |
+| master | buffer | nothing | saved; pages 100-767 all zeros |
+| P18 | none | - | saved; the same data as master's |
+| P18 | status | the same error, then "flash_backup: Failed to read flash region", "An unexpected error occurred" | none |
+| P18 | cmd | "flash_backup: Failed to read flash region", "File or device I/O failure" | none |
+| P18 | buffer | the same as cmd | none |
+
+Each failing read stopped after page 100 (no "Done reading 768 pages").
+bladeRF-cli's exit status was 0 in every case, also when the command failed
+(as for every failed `-e` command).
+
+**The full bandwidth sweep in host tuning mode (I1).** `test_ctrl -T host -t
+bandwidth` (the full sweep: 3,448 bandwidth changes) three times with
+Nuand's libbladeRF (host-build), then `-T fpga` once as the control, each
+with every Nios packet traced (`lib/nios-trace.c`, test_ctrl only) and the
+trace analyzed with `bin/nios-trace-analyze.py`:
+
+| Run | Result | Time | Nios requests | IN time-outs | Replies to another request | Longest Nios reply |
+|---|---|---|---|---|---|---|
+| host 1 | pass | 472 s | 1,153,103 | 0 | 0 | 0.5 ms |
+| host 2 | pass | 483 s | 1,167,046 | 0 | 0 | 0.5 ms |
+| host 3 | pass | 496 s | 1,183,654 | 0 | 0 | 0.5 ms |
+| FPGA (control) | pass | 392 s | 18,539 | 1,261 | 0 | 250.3 ms |
+
+- In host tuning mode libbladeRF runs the AD9361 driver on the host: about
+  340 Nios requests per bandwidth change, each a short register access (the
+  only RFIC packets were 4 status reads, when test_ctrl opened the device).
+  No request keeps the Nios busy, so no status poll times out, and I1
+  cannot happen. Host tuning mode is libbladeRF's default; FPGA tuning mode
+  is selected with `BLADERF_DEFAULT_TUNING_MODE=fpga` or
+  `bladerf_set_tuning_mode()`.
+- The control has I1's time-outs as before: 1,261, and 1,279 bandwidth
+  changes took 250 ms or more (the traces of 2026-11-13 under 3a768f3d
+  below: 1,300 to 1,330 time-outs per run with A and B). This time the Nios
+  never answered both polls, so no reply went to the wrong request and the
+  run passed: a failure needs the Nios to finish in the ~0.2 ms between a
+  time-out and the next poll (README.md).
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -1876,6 +1933,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 - With the fix the full sweep passes on A, B and C (section 4), and it is not
   slower: 370.5 s without and 376.8 s with the fix, traced back to back
   (`results/bw-diag/20261113-161738`, `-162354`).
+- Without the fix, host tuning mode (libbladeRF's default) avoids it: three
+  full sweeps had no time-out and passed (section 20).
 
 #### 2ac75f37 libbladeRF: enable both channels of a MIMO layout in FPGA tuning mode too
 
