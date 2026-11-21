@@ -536,3 +536,4 @@ went to which port.
 | `bin/nios-trace-analyze.py` | Flags Nios time-outs and replies that belong to another request in a trace |
 | `bin/nios-trace-threads.py` | Summarizes a Nios trace of any program: time-outs and what the Nios was busy with, late replies, Nios answer times, how long each RFIC command kept the Nios busy, sample-stream gaps and failed transfers |
 | `lib/gain-readback.c` | Sets 14 RX1 gains in the three RX gain bands and reads them back, RX only (negative gains read back as -2147483648 in FPGA tuning mode without `host-fixes` dc41000f) |
+| `lib/flash-read-fail.c` | LD_PRELOAD shim that makes one SPI flash page read fail (`FLASH_READ_FAIL_PAGE`, `FLASH_READ_FAIL_KIND` = status, cmd or buffer), to see what libbladeRF returns then; it refuses every flash write, erase, OTP write and bootloader jump, and logs every vendor request (`FLASH_READ_FAIL_LOG`). `-DFLASH_READ_FAIL_SELFTEST` builds its self-test |
