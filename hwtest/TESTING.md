@@ -62,6 +62,7 @@ radio that transmits and measures for `bin/rf-check.py` and
 | from 2026-11-20 ~07:05 (the xA9's channel 2, section 18) | 50 Ω load | 50 Ω load | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX |
 | from 2026-11-20 ~21:45 (the xA9's two channels at once, receive; open item 8) | 50 Ω load | ← 20 dB ← splitter ← B200mini TX/RX | 50 Ω load | ← 20 dB ← the same splitter |
 | from 2026-11-20 ~22:20 (the same, the two cables at RX1 and RX2 exchanged) | 50 Ω load | the path that was on RX2 | 50 Ω load | the path that was on RX1 |
+| from 2026-11-20 ~22:30 (the xA9's two channels at once, transmit; open item 8) | RX1's cable: 20 dB → splitter → B200mini RX2 | 50 Ω load | RX2's cable: 20 dB → the same splitter | 50 Ω load |
 
 The splitter is a TOJOIN PS-2SM-2080 (2 to 8 GHz) with a 20 dB attenuator
 on each output (README.md, "Two-channel setups"). The B200mini's unused
@@ -1596,6 +1597,41 @@ below 3 GHz (port B). That is the RX1-weaker-at-5.8-GHz of open item 9,
 now measured on one signal at the same time; section 18's 2.0 to 2.3 dB
 came from two campaigns 7 hours apart, with the cable moved in between.
 
+**Transmit** (`HWTEST_2CH=tx`: the same splitter and attenuators turned
+round, the splitter's common port on the B200mini's RX2, the cabling
+table's row from ~22:30; `plans/twochtx-xA9-20261120-2238.txt`, results
+`results/twochtx-20261120-223438/` and `results/xA9-{A,B,C}-twochtx{,-fixes}/`).
+22:34 to 23:25, no stop. The pre-check and all six runs passed: images C, A
+and B, in both tuning modes with either build (two-channel transmit in FPGA
+tuning mode works with Nuand's libbladeRF too). 65 records of one point
+each, 65 pass, no retries; each run 8 minutes. The ranges over all of them:
+
+| Point | TX2 − TX1 level | TX2 / TX1 move for TX2's 10 dB step | Alone against both | Other channel's tone, alone | Image | LO leakage | Tone above floor |
+|---|---|---|---|---|---|---|---|
+| 433 MHz | −0.4 dB | −10.1 / 0.0 dB | within 0.1 dB | −67 to −77 dBc | −47 to −48 dBc | −38 to −40 dBc | ≥ 81 dB |
+| 915 MHz | −0.1 dB | −10.1 / 0.0 dB | within 0.1 dB | −67 to −74 dBc | −47 to −49 dBc | −41 to −42 dBc | ≥ 80 dB |
+| 1575.42 MHz | −0.4 dB | −10.1 / 0.0 dB | within 0.1 dB | −62 to −70 dBc | −37 to −40 dBc | −39 to −40 dBc | ≥ 75 dB |
+| 3.5 GHz | −0.4 to −0.5 dB | −10.1 / 0.0 dB | within 0.1 dB | −55 to −62 dBc | −46 to −53 dBc | −47 to −50 dBc | ≥ 67 dB |
+| 5.8 GHz | −1.2 to −1.4 dB | −9.9 to −10.1 / ≤ +0.1 dB | within 0.1 dB | −39 to −49 dBc | −39 to −47 dBc | −26 to −27 dBc | ≥ 52 dB |
+
+- The three images, the two tuning modes and the two builds gave the same
+  levels within 0.1 dB.
+- The disabled channel sends nothing that the B200mini can see. In the
+  pre-check's saved captures, no line at the other channel's tone
+  frequency stands above the noise around it (±400 bins), at any point. So
+  that column is a noise reading, and its margin to the −30 dBc limit
+  (9 dB at 5.8 GHz) comes from the signal-to-noise ratio, not from leakage.
+- The two tones' frequency errors agree within 1.4 Hz (one bin: 30 to
+  38 Hz). Both are +2.0 ppm against the B200mini at every point, as in
+  section 18.
+- TX2 is 1.3 dB weaker than TX1 at 5.8 GHz (section 18, one channel at a
+  time: 1.2 to 1.7 dB). The splitter, attenuators and cables are passive,
+  so the two paths agree within 0.07 dB in this direction too (the swap
+  above), and that difference is the board's. At 5.8 GHz this board's
+  channel 2 is the weaker transmitter and the stronger receiver.
+- The transmit test does not measure the phase or the timing between TX1
+  and TX2: the two tones have different frequencies.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -1819,8 +1855,9 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    runs about 40 % long (section 12); the wlan revision fails recovery timing
    and the adsb revision setup timing in Nuand's own builds (section 11).
 8. Both channels' RF at the same time: twoch-check.py does it through a
-   2-way splitter (README.md). Receive passes on A, B and C, in both tuning
-   modes, on the xA9 (section 19). Transmit has not run on hardware yet.
+   2-way splitter (README.md). Receive and transmit pass on A, B and C, in
+   both tuning modes, on the xA9 (section 19). The transmit test does not
+   measure the phase or the timing between TX1 and TX2.
 9. Seen on Nuand's image as on ours, on the xA5: TX1 is weaker around
    100-125 MHz than elsewhere (up to 14 dB) and than TX2 at 100 MHz
    (13 dB), and RX1 is 3.5 dB weaker than RX2 at 5.8 GHz (section 13). The
@@ -1830,7 +1867,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    18), so that difference is not one board's. Measured on both channels
    at once, with the two paths exchanged, the xA9's RX2 is 1.5 dB stronger
    than RX1 at 5.8 GHz and 0.8 dB at 3.5 GHz, and the paths add less than
-   0.1 dB (section 19). The start of every
+   0.1 dB (section 19). Through the same paths, its TX2 is 1.3 dB weaker
+   than TX1 at 5.8 GHz. The start of every
    transmission brings up to ~0.7 s of short, weak, off-frequency bursts
    (section 13; cause not investigated).
 10. An FX3 lockup with a known trigger and a fix (2026-11-18, the xA9 on a
