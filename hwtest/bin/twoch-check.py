@@ -5,6 +5,7 @@ RX1 and RX2 at the same time, and TX1 and TX2 at the same time, through a
 
   twoch-check.py rx [--out results.jsonl] [--points N] [--save DIR]
   twoch-check.py tx [--out results.jsonl] [--points N] [--save DIR]
+      with HWTEST_2CH_TX=sync only the sync runs (phase and timing)
   twoch-check.py --analyze DIR [--out results.jsonl]
       re-analyzes the captures that --save kept in DIR (transmits nothing)
   twoch-check.py --self-test
@@ -48,6 +49,20 @@ their images at 3 and 2, the LO leakage at 5, the B200mini's images of all of
 these at -7 to -2, its DC at 0. Measured: both tones' frequencies and levels,
 each channel's image and LO leakage, how each tone follows TX2's gain step,
 and the single-channel runs against the two-channel one.
+
+tx, then the sync runs (TX phase and timing; with HWTEST_2CH_TX=sync only
+these): three more bladeRF-cli runs of a two-channel file of repeated cycles
+(SYNC_* below): a block in which TX1 and TX2 each send a marker tone, then
+four blocks in which both send the same multitone, TX2's turned by 0, 90,
+180 and 270 degrees. The B200mini, tuned to the carrier, receives the two
+channels' sum; from each line's power in the four blocks follows the
+cross-spectrum of TX1 and TX2 at the line, without any lock between the two
+radios. Measured, per run: TX2's lag behind TX1 (whole samples from the
+markers, the fraction from the slope of the cross-spectrum's phase, as in
+rx), TX2's phase relative to TX1 at the carrier, and both per cycle (a lost
+or extra sample on one channel moves the lag by one). The second and third
+runs tune both TX channels elsewhere first (retune_away), so the phase over
+the three runs is reported as rx's retunes are.
 
 Every number goes into one JSON record per point and subcommand, with "pass"
 and the reasons in "fails"; the thresholds are the named constants below,
@@ -159,6 +174,37 @@ B200_WARMUP_S = 1.5     # B200mini transmitting before bladeRF-cli starts (as rf
 CLI_TIMEOUT_S = 120
 TRIES = 3               # tries per point before giving up on a dropped-samples error
 
+# TX phase and timing (the sync runs). A file of repeated cycles of five
+# blocks of SYNC_NB samples: in block 0 TX1 sends a marker tone and TX2
+# another; in blocks 1 to 4 both send the same multitone, TX2's turned by
+# SYNC_PHASES. The B200mini is tuned to the carrier. In each block it sees
+# the sum of the two channels, so at line k the block's power is
+# |A + e^(j theta) B|^2 = |A|^2 + |B|^2 + 2 Re(e^(j theta) conj(A) B), with A
+# and B the two channels' line as the B200mini receives it: the four blocks
+# give conj(A) B = ((P0 - P180) + j (P270 - P90)) / 4, TX1's and TX2's
+# cross-spectrum at the line, from powers alone. The two radios' frequency
+# offset and phase noise turn A and B alike within a block (one LO on each
+# side: the AD9361's TX LO serves TX1 and TX2) and leave every power as it
+# is, so nothing has to be locked to the bladeRF. The cross-spectrum's phase
+# against frequency is then fitted as for rx (align): its slope is TX2's lag
+# behind TX1, its intercept TX2's phase relative to TX1 at the carrier.
+SYNC_NB = 16384         # samples per block
+SYNC_SPACING = 400      # bins of SYNC_NB between lines (0.024 fs)
+SYNC_LINE_OFFSET = 133  # lines at SYNC_SPACING * m + 133 bins: never on a line's image (-k), DC or a marker
+SYNC_BAND = 0.35        # lines within +-0.35 fs (FIT_BAND): 29 lines
+SYNC_MARKER1 = 3133     # TX1's marker tone, bins of SYNC_NB (0.19 fs), half way between two lines
+SYNC_MARKER2 = -2867    # TX2's (-0.18 fs), also between two lines and off both markers' images
+SYNC_PHASES = (0, 90, 180, 270)     # TX2's turn in blocks 1 to 4, degrees
+SYNC_AMP = 0.5          # each channel's peak amplitude, multitone and marker (as TONE_AMP)
+SYNC_GUARD = 2048       # samples left out at both ends of a block (filters, block edges)
+SYNC_CYCLES = 8         # whole cycles in each capture (and a part of one more)
+SYNC_MARKER_GAP = 1024  # samples of silence before and after the markers in block 0 (see sync_cycle)
+SYNC_ENV_LEN = 256      # samples: the markers' envelope filter (Hann; the nearest lines 40 dB down)
+SYNC_PERIOD_TOL = 64    # samples: one marker block to the next, 5 * SYNC_NB (block edges +-10 at 5.8 GHz)
+# (capture, which of retune_away()'s frequencies the bladeRF tunes to first
+# or None): the sync runs, each a new bladeRF-cli run and stream
+SYNC_RUNS = [("sync0", None), ("sync1", 0), ("sync2", 1)]
+
 # --- Pass/fail thresholds -------------------------------------------------
 # A tone is there when it is within 10 ppm (+100 Hz) of where it should be
 # and 30 dB above the median of the spectrum: rf-check.tone_found's rule. The
@@ -212,6 +258,22 @@ FREQ_AGREE_BINS = 1.0
 LAG_SAMPLES = 0
 CORR_PEAK_MIN_DB = 10.0
 FRAC_LAG_MAX = 0.25
+# TX (the sync runs): the same lag and fraction from the multitone's lines,
+# and per cycle (5 blocks) the phase at the carrier within PHASE_SPREAD_MAX_DEG
+# and the lag within FRAC_LAG_MAX of each other (a sample lost or added on
+# TX2 moves the lag of the cycles after it by one). The lines alone repeat
+# every SYNC_NB / SYNC_SPACING = 41 samples, so the markers' lag (their
+# blocks' centres, a few samples off at 5.8 GHz) picks the whole samples
+# first, and the lines' lag must agree with it within SYNC_MARKER_AGREE
+# samples (a marker block found in the wrong place shows there). A line is
+# fitted when its cross-spectrum stands SYNC_LINE_SNR_DB
+# above its scatter over the cycles (a phase error of 18 degrees or less),
+# and at least SYNC_MIN_LINES of the 29 must; at least SYNC_MIN_CYCLES whole
+# cycles, or the capture is retried (something lost or added samples).
+SYNC_MARKER_AGREE = 15.0
+SYNC_LINE_SNR_DB = 10.0
+SYNC_MIN_LINES = 15
+SYNC_MIN_CYCLES = 4
 # Report only: retune phases within 5 degrees of the first count as stable.
 RETUNE_STABLE_DEG = 5.0
 
@@ -448,6 +510,181 @@ def tx_positions(f1, f2, delta):
     return {"t1": f1 + delta, "t2": f2 + delta, "i1": delta - f1, "i2": delta - f2, "lo": delta}
 
 
+# --- TX phase and timing (the sync runs) ----------------------------------
+
+def sync_lines():
+    """The multitone's lines, in bins of SYNC_NB from the carrier, ascending."""
+    kmax = int(SYNC_BAND * SYNC_NB)
+    m = np.arange(-(kmax // SYNC_SPACING) - 1, kmax // SYNC_SPACING + 2)
+    k = SYNC_SPACING * m + SYNC_LINE_OFFSET
+    return k[np.abs(k) <= kmax]
+
+
+def sync_cycle():
+    """One cycle of the sync file, TX1 and TX2 (5 * SYNC_NB samples each):
+    block 0 the two markers, with SYNC_MARKER_GAP samples of silence on both
+    sides (the multitone cut off at a block's edge spreads over the markers'
+    frequencies: next to a marker it moved the marker's edges by up to 5
+    samples, depending on TX2's phase); blocks 1-4 the multitone, TX2's
+    turned by SYNC_PHASES. Every line completes whole cycles in a block, so
+    TX1's multitone runs on without a step from block 1 to block 4. Newman's
+    phases keep its peak low (crest factor 1.4)."""
+    n = np.arange(SYNC_NB)
+    k = sync_lines()
+    ph = np.pi * np.arange(len(k)) ** 2 / len(k)
+    m = np.exp(2j * np.pi * np.outer(n, k) / SYNC_NB + 1j * ph).sum(axis=1)
+    m *= SYNC_AMP / np.max(np.abs(m))
+    gate = (n >= SYNC_MARKER_GAP) & (n < SYNC_NB - SYNC_MARKER_GAP)
+    mk = lambda kb: SYNC_AMP * np.exp(2j * np.pi * kb * n / SYNC_NB) * gate
+    x1 = np.concatenate([mk(SYNC_MARKER1)] + [m] * len(SYNC_PHASES))
+    x2 = np.concatenate([mk(SYNC_MARKER2)] + [m * np.exp(1j * np.radians(t)) for t in SYNC_PHASES])
+    return x1, x2
+
+
+def sync_capture_len():
+    """B200mini samples per sync capture: SYNC_CYCLES whole cycles wherever it
+    starts, and the marker block that ends the last one."""
+    return int((SYNC_CYCLES + 1.25) * (1 + len(SYNC_PHASES)) * SYNC_NB)
+
+
+def sync_markers(y, fs, fc):
+    """TX1's and TX2's markers in a sync capture: each one's frequency and
+    level (rf-check's rule for "there"), and the centre of every block in
+    which it is on, where its envelope (y mixed down to the marker and
+    averaged over SYNC_ENV_LEN samples, Hann-weighted) crosses half its
+    level, interpolated between samples. Blocks cut off by the capture's
+    ends, or not as long as a marker (+-SYNC_NB / 8), are left out."""
+    f, s, enbw = spectrum(y, fs)
+    floor = float(10 * np.log10(np.median(np.abs(s) ** 2) + 1e-30))
+    n = np.arange(len(y))
+    la = SYNC_ENV_LEN
+    h = np.hanning(la + 2)[1:-1]
+    nf = 1 << int(np.ceil(np.log2(len(y) + la)))
+    hf = np.fft.fft(h / np.sum(h), nf)
+    out = {}
+    for name, kb in (("tx1", SYNC_MARKER1), ("tx2", SYNC_MARKER2)):
+        fe = kb * fs / SYNC_NB
+        fq, lev = tone_at(f, s, enbw, fe, freq_tol(fc))
+        z = np.fft.ifft(np.fft.fft(y * np.exp(-2j * np.pi * fq * n / fs), nf) * hf)
+        e = np.abs(z[la // 2:la // 2 + len(y)])
+        half = 0.5 * float(np.percentile(e, 99))      # the marker is on in 1/5 of the samples
+        on = e > half
+        edges = np.flatnonzero(on[1:] != on[:-1])     # between samples i and i + 1
+        rises, falls = edges[~on[edges]], edges[on[edges]]
+        centers = []
+        for r in rises:
+            j = np.searchsorted(falls, r)
+            if j == len(falls):
+                break
+            fl = falls[j]
+            if abs((fl - r) - (SYNC_NB - 2 * SYNC_MARKER_GAP)) > SYNC_NB // 8 or r < la or fl > len(y) - la:
+                continue
+            xr = r + (half - e[r]) / (e[r + 1] - e[r])
+            xf = fl + (e[fl] - half) / (e[fl] - e[fl + 1])
+            centers.append(float(0.5 * (xr + xf)))
+        inside = np.zeros(len(y), dtype=bool)
+        for c in centers:
+            inside[int(c - SYNC_NB / 4):int(c + SYNC_NB / 4)] = True
+        contrast = (20 * np.log10(np.median(e[inside]) / (np.median(e[~inside]) + 1e-30) + 1e-30)
+                    if centers else None)
+        out[name] = {"freq_err_hz": fq - fe, "level_dbfs": lev, "snr_db": lev - floor,
+                     "present": bool(lev >= floor + TONE_SNR_DB and abs(fq - fe) <= freq_tol(fc)),
+                     "blocks": len(centers), "contrast_db": contrast, "centers": centers}
+    return out
+
+
+def _wfit(x, y, w):
+    """Weighted straight line y = c0 + c1 x: (c0, c1)."""
+    sw = np.sqrt(w)
+    (c0, c1), _, _, _ = np.linalg.lstsq(np.vstack([sw, sw * x]).T, sw * y, rcond=None)
+    return float(c0), float(c1)
+
+
+def analyze_sync(y, meta):
+    """TX2's lag behind TX1 and phase relative to TX1 from one sync capture
+    (the B200mini tuned to the carrier): the cycles, from TX1's marker
+    blocks; in each whole cycle each line's power in blocks 1-4, so its
+    cross-spectrum conj(A) B; over the cycles, each line's mean and scatter;
+    the lines' phase against frequency, the markers' lag taken out first,
+    fitted as in align() (lag_est_samples, phase_at_fc_deg); and the same per
+    cycle. Raises RuntimeError when the capture holds no TX1 marker or too
+    few whole cycles (retried as a capture problem)."""
+    fs, fc = meta["fs_b200"], meta["fc"]
+    mk = sync_markers(y, fs, fc)
+    m1, m2 = mk["tx1"], mk["tx2"]
+    if not m1["present"] or m1["blocks"] < 2:
+        raise RuntimeError("sync: TX1's marker is not there (%.1f dB above the floor, %d blocks)"
+                           % (m1["snr_db"], m1["blocks"]))
+    period = (1 + len(SYNC_PHASES)) * SYNC_NB
+    c1 = np.asarray(m1["centers"])
+    gaps = np.diff(c1)
+    whole = np.abs(gaps - period) <= SYNC_PERIOD_TOL
+    starts = c1[:-1][whole] - SYNC_NB / 2
+    out = {"freq_err_hz": m1["freq_err_hz"], "markers": {k: {kk: v[kk] for kk in v if kk != "centers"}
+                                                          for k, v in mk.items()},
+           "cycles": int(len(starts)), "irregular_cycles": int(np.sum(~whole))}
+    if len(starts) < SYNC_MIN_CYCLES:
+        raise RuntimeError("sync: %d whole cycles (%d irregular; limit %d): samples lost or added"
+                           % (len(starts), out["irregular_cycles"], SYNC_MIN_CYCLES))
+    lags = []
+    for c in c1:
+        d = [c2 - c for c2 in m2["centers"] if abs(c2 - c) < SYNC_NB / 2]
+        if d:
+            lags.append(d[0])
+    out["marker_lag_samples"] = float(np.median(lags)) if (lags and m2["present"]) else None
+    if out["marker_lag_samples"] is not None:
+        out["marker_lag_spread_samples"] = float(np.max(lags) - np.min(lags))
+
+    # every line's power in blocks 1-4 of every whole cycle: a single-bin
+    # DFT (Blackman) at the line plus the radios' offset (TX1's marker's)
+    k = sync_lines()
+    fk = k * fs / SYNC_NB
+    na = SYNC_NB - 2 * SYNC_GUARD
+    w = np.blackman(na)
+    dft = np.exp(-2j * np.pi * np.outer(fk + m1["freq_err_hz"], np.arange(na)) / fs) * (w / np.sum(w))
+    P = np.empty((len(starts), len(SYNC_PHASES), len(k)))
+    for c, st in enumerate(starts):
+        for b in range(len(SYNC_PHASES)):
+            s0 = int(round(st)) + (b + 1) * SYNC_NB + SYNC_GUARD
+            P[c, b] = np.abs(dft @ y[s0:s0 + na]) ** 2
+    X = ((P[:, 0] - P[:, 2]) + 1j * (P[:, 3] - P[:, 1])) / 4    # conj(A) B, cycle x line
+    nc = len(starts)
+    xm = X.mean(axis=0)
+    sem = np.sqrt(np.sum(np.abs(X - xm) ** 2, axis=0) / (nc * (nc - 1)))
+    snr = np.abs(xm) / (sem + 1e-30)
+    sel = snr >= 10 ** (SYNC_LINE_SNR_DB / 20)
+    out.update(lines=int(len(k)), fit_lines=int(np.sum(sel)),
+               line_snr_median_db=float(20 * np.log10(np.median(snr) + 1e-30)),
+               lag_samples=None, lag_est_samples=None, phase_at_fc_deg=None)
+    if out["fit_lines"] < SYNC_MIN_LINES:
+        return out
+    # the markers' lag first (whole samples), then the slope of what is left
+    # (normalized frequency u = f / fs: the slope is -2 pi times the lag)
+    l0 = int(round(out["marker_lag_samples"])) if out["marker_lag_samples"] is not None else 0
+    u = fk / fs
+    rot = np.exp(2j * np.pi * u * l0)
+    wk = np.minimum(snr ** 2, 1e6)[sel]
+    ph = np.unwrap(np.angle(xm[sel] * rot[sel]))
+    c0, cs = _wfit(u[sel], ph, wk)
+    res = ph - (c0 + cs * u[sel])
+    lag = l0 - cs / (2 * np.pi)
+    out.update(lag_samples=int(np.round(lag)), lag_est_samples=float(lag),
+               phase_at_fc_deg=float(wrap_deg(np.degrees(c0))),
+               fit_rms_deg=float(np.degrees(np.sqrt(np.sum(wk * res ** 2) / np.sum(wk)))))
+    # per cycle: the same fit to what each cycle adds to the mean's
+    cph, clag = [], []
+    for c in range(nc):
+        r = np.angle(X[c, sel] * rot[sel] * np.exp(-1j * (c0 + cs * u[sel])))
+        d0, ds = _wfit(u[sel], r, wk)
+        cph.append(float(wrap_deg(np.degrees(c0 + d0))))
+        clag.append(float(lag - ds / (2 * np.pi)))
+    dev = wrap_deg(np.asarray(cph) - out["phase_at_fc_deg"])
+    out.update(cycle_phases_deg=cph, cycle_lags=clag,
+               cycle_phase_spread_deg=float(dev.max() - dev.min()),
+               cycle_lag_spread_samples=float(max(clag) - min(clag)))
+    return out
+
+
 # --- Analysis (shared by the hardware runs and --analyze) -----------------
 
 def analyze_rx(meta, caps):
@@ -591,12 +828,9 @@ def tx_measure(y, meta):
     return out
 
 
-def analyze_tx(meta, caps):
-    """The tx record from the four B200mini captures."""
+def tx_levels(meta, caps, m, fails):
+    """The tone runs' part of the tx record (into m and fails)."""
     fc = meta["fc"]
-    m = {"test": "twoch_tx", "fc": fc, "fs": meta["fs"], "f1": meta["f1"], "f2": meta["f2"],
-         "b200_offset_hz": -meta["delta"], "gain_db": meta["gain"], "gain_low_db": meta["gain_low"]}
-    fails = []
     d = tx_measure(caps["dual"][0], meta)
     t1, t2 = d["t1"], d["t2"]
     m["tx1"] = dict(t1, image_dbc=d["i1"] - t1["level_dbfs"])
@@ -654,6 +888,63 @@ def analyze_tx(meta, caps):
             fails.append("%s alone: the other channel's tone is there at %.1f dBc (limit %.0f)"
                          % (nm, r["other_dbc"], ABSENT_MAX_DBC))
     m["single"] = single
+
+
+def tx_sync(meta, caps, m, fails):
+    """The sync runs' part of the tx record (into m and fails): in every run
+    TX2's lag and phase relative to TX1, judged as rx's alignment and phase
+    spread; the phases over the runs (each a new stream, the later ones
+    after tuning elsewhere first) reported as rx's retunes."""
+    runs = {}
+    for name, away in SYNC_RUNS:
+        if name not in caps:
+            continue
+        s = analyze_sync(caps[name][0], meta)
+        s["away_hz"] = None if away is None else meta["retune_away"][away]
+        runs[name] = s
+        tag = name if away is None else "%s (tuned to %.0f MHz first)" % (name, s["away_hz"] / 1e6)
+        if s["marker_lag_samples"] is None:
+            fails.append("%s: TX2's marker is not there (%.1f dB above the floor)"
+                         % (tag, s["markers"]["tx2"]["snr_db"]))
+        if s["lag_est_samples"] is None:
+            fails.append("%s: %d lines %.0f dB above their scatter (limit %d of %d)"
+                         % (tag, s["fit_lines"], SYNC_LINE_SNR_DB, SYNC_MIN_LINES, s["lines"]))
+            continue
+        if s["lag_samples"] != LAG_SAMPLES:
+            fails.append("%s: TX2 is %d samples %s TX1" % (tag, abs(s["lag_samples"]),
+                                                           "behind" if s["lag_samples"] > 0 else "ahead of"))
+        elif abs(s["lag_est_samples"]) > FRAC_LAG_MAX:
+            fails.append("%s: TX2 lags TX1 by %+.3f samples (limit %.2f)"
+                         % (tag, s["lag_est_samples"], FRAC_LAG_MAX))
+        if (s["marker_lag_samples"] is not None and
+                abs(s["marker_lag_samples"] - s["lag_est_samples"]) > SYNC_MARKER_AGREE):
+            fails.append("%s: the markers' lag %+.1f samples, the lines' %+.3f (limit %.0f apart)"
+                         % (tag, s["marker_lag_samples"], s["lag_est_samples"], SYNC_MARKER_AGREE))
+        if s["cycle_phase_spread_deg"] > PHASE_SPREAD_MAX_DEG:
+            fails.append("%s: phase difference spread %.1f deg over %d cycles (limit %.1f)"
+                         % (tag, s["cycle_phase_spread_deg"], s["cycles"], PHASE_SPREAD_MAX_DEG))
+        if s["cycle_lag_spread_samples"] > FRAC_LAG_MAX:
+            fails.append("%s: TX2's lag moved %.2f samples over %d cycles (limit %.2f)"
+                         % (tag, s["cycle_lag_spread_samples"], s["cycles"], FRAC_LAG_MAX))
+    phases = [r["phase_at_fc_deg"] for r in runs.values() if r.get("phase_at_fc_deg") is not None]
+    sync = {"runs": runs, "phases_deg": phases}
+    if len(phases) >= 2:
+        sync.update(retune_summary(phases))
+    m["sync"] = sync
+
+
+def analyze_tx(meta, caps):
+    """The tx record from the B200mini captures: the tone runs' part
+    (tx_levels) and the sync runs' (tx_sync), each when its captures are
+    there (HWTEST_2CH_TX=sync takes only the sync runs)."""
+    m = {"test": "twoch_tx", "fc": meta["fc"], "fs": meta["fs"], "f1": meta["f1"], "f2": meta["f2"],
+         "b200_offset_hz": -meta["delta"], "gain_db": meta["gain"], "gain_low_db": meta["gain_low"],
+         "runs": [k for k in meta["caps"] if k in caps]}
+    fails = []
+    if "dual" in caps:
+        tx_levels(meta, caps, m, fails)
+    if any(name in caps for name, _ in SYNC_RUNS):
+        tx_sync(meta, caps, m, fails)
     m["pass"] = not fails
     m["fails"] = fails
     return m
@@ -816,9 +1107,11 @@ def check_rx(u, point):
 def tx_meta(point):
     fc, fs, _ = point
     f1, f2, delta = tx_plan(fs)
+    caps = {k: {"kind": "b200"} for k in ("dual", "tx2low", "tx1", "tx2")}
+    caps.update({name: {"kind": "b200_sync"} for name, _ in SYNC_RUNS})
     return {"mode": "tx", "fc": fc, "fs": fs, "fs_b200": fs, "f1": f1, "f2": f2, "delta": delta,
             "gain": TX_GAIN, "gain_low": TX_GAIN_LOW, "b200_rx_gain": rf.B200_RX_GAIN,
-            "caps": {k: {"kind": "b200"} for k in ("dual", "tx2low", "tx1", "tx2")}}
+            "retune_away": retune_away(fc), "caps": caps}
 
 
 # (capture, file, channels, TX1 gain, TX2 gain): the four TX runs
@@ -828,11 +1121,15 @@ TX_RUNS = [("dual", "dual", [1, 2], TX_GAIN, TX_GAIN),
            ("tx2", "tx2", [2], TX_GAIN, TX_GAIN)]
 
 
-def tx_cmds(meta, path, chans, g1, g2):
+def tx_cmds(meta, path, chans, g1, g2, away=None):
+    """One bladeRF-cli run that sends path; away: both TX channels tuned
+    there first, then to the carrier (the sync runs' retunes)."""
     if max(g1, g2) > TX_GAIN_MAX:
         raise ValueError("bladeRF TX gain above %d dB" % TX_GAIN_MAX)
     fc, fs = meta["fc"], meta["fs"]
     c = ["set loopback none"]
+    if away is not None:
+        c += ["set frequency tx1 %d" % away, "set frequency tx2 %d" % away]
     for ch in (1, 2):
         c += ["set frequency tx%d %d" % (ch, fc),
               "set samplerate tx%d %d" % (ch, fs),
@@ -857,18 +1154,46 @@ def write_tx_files(meta, d):
     return paths
 
 
-def tx_run(u, meta, path, chans, g1, g2):
+def write_sync_file(meta, d):
+    """The sync file: whole cycles (sync_cycle), about TX_FILE_S long, both
+    channels interleaved (TX1 first)."""
+    x1, x2 = sync_cycle()
+    reps = max(1, int(round(TX_FILE_S * meta["fs"] / len(x1))))
+    path = os.path.join(d, "tx-sync.bin")
+    interleave_sc16([rf.to_sc16q11(np.tile(x1, reps)),
+                     rf.to_sc16q11(np.tile(x2, reps))]).astype("<i2").tofile(path)
+    return path
+
+
+def sync_present(y, meta):
+    """Whether a capture holds TX1's marker 30 dB above the floor (it is on
+    in a fifth of the time, so in a capture's spectrum it stands about 14 dB
+    lower than a steady tone would)."""
+    f, s, enbw = spectrum(y, meta["fs_b200"])
+    floor = float(10 * np.log10(np.median(np.abs(s) ** 2) + 1e-30))
+    lev = tone_at(f, s, enbw, SYNC_MARKER1 * meta["fs_b200"] / SYNC_NB, freq_tol(meta["fc"]))[1]
+    return lev >= floor + TONE_SNR_DB
+
+
+def tx_run(u, meta, path, chans, g1, g2, away=None, sync=False):
     """One bladeRF transmission (bladeRF-cli in a thread, as rf-check.check_tx)
     and the B200mini capture to measure it; returns (capture, seconds until
-    the first tone)."""
+    the first tone). sync: the sync file, the B200mini tuned to the carrier,
+    a capture of sync_capture_len() samples."""
     fc = meta["fc"]
     want = ["t%d" % ch for ch in chans]
-    n = int(meta["fs_b200"] * B200_CAPTURE_S)
+    n_find = int(meta["fs_b200"] * B200_CAPTURE_S)
+    if sync:
+        b200_fc, n = fc, sync_capture_len()
+        there = lambda y: sync_present(y, meta)
+    else:
+        b200_fc, n = fc - meta["delta"], n_find
+        there = lambda y: any(tx_measure(y, meta)[k]["present"] for k in want)
     result = {}
 
     def bladerf_tx():
         try:
-            result["out"] = cli(tx_cmds(meta, path, chans, g1, g2))
+            result["out"] = cli(tx_cmds(meta, path, chans, g1, g2, away))
         except Exception as e:      # re-raised below
             result["error"] = e
 
@@ -878,15 +1203,14 @@ def tx_run(u, meta, path, chans, g1, g2):
     try:
         time.sleep(2.0)
         while found is None and time.time() - t0 < TX_SEARCH_S and t.is_alive():
-            y = rf.b200_capture(u, n, fc - meta["delta"], meta["fs_b200"], rf.B200_RX_GAIN)
-            q = tx_measure(y, meta)
-            if any(q[k]["present"] for k in want):
+            y = rf.b200_capture(u, n_find, b200_fc, meta["fs_b200"], rf.B200_RX_GAIN)
+            if there(y):
                 found = round(time.time() - t0, 1)
             else:
                 time.sleep(0.5)
         if found is not None:
             time.sleep(rf.TX_SETTLE_S)      # past the start-up bursts (see rf-check)
-            y = rf.b200_capture(u, n, fc - meta["delta"], meta["fs_b200"], rf.B200_RX_GAIN)
+            y = rf.b200_capture(u, n, b200_fc, meta["fs_b200"], rf.B200_RX_GAIN)
             ended = not t.is_alive()
     finally:
         t.join()
@@ -900,16 +1224,31 @@ def tx_run(u, meta, path, chans, g1, g2):
     return y, found
 
 
+def sync_only():
+    """HWTEST_2CH_TX=sync: tx makes only the sync runs (phase and timing)."""
+    v = os.environ.get("HWTEST_2CH_TX", "")
+    if v not in ("", "all", "sync"):
+        sys.exit("HWTEST_2CH_TX=%s: all (the default) or sync" % v)
+    return v == "sync"
+
+
 def check_tx(u, point):
-    """bladeRF transmits (both channels, TX2 lower, each alone), B200mini
-    measures."""
+    """bladeRF transmits (the tone runs: both channels, TX2 lower, each
+    alone; the sync runs), B200mini measures."""
     meta = tx_meta(point)
     caps, found = {}, {}
     with work_dir() as d:
-        files = write_tx_files(meta, d)
-        for name, fname, chans, g1, g2 in TX_RUNS:
-            y, found[name] = tx_run(u, meta, files[fname], chans, g1, g2)
+        if not sync_only():
+            files = write_tx_files(meta, d)
+            for name, fname, chans, g1, g2 in TX_RUNS:
+                y, found[name] = tx_run(u, meta, files[fname], chans, g1, g2)
+                caps[name] = [y]
+        path = write_sync_file(meta, d)
+        for name, away in SYNC_RUNS:
+            y, found[name] = tx_run(u, meta, path, [1, 2], TX_GAIN, TX_GAIN, sync=True,
+                                    away=None if away is None else meta["retune_away"][away])
             caps[name] = [y]
+    meta["caps"] = {k: v for k, v in meta["caps"].items() if k in caps}
     if SAVE_DIR:
         save_point(meta, {}, {k: v[0] for k, v in caps.items()})
     m = analyze_tx(meta, caps)
@@ -1182,6 +1521,86 @@ def self_test():
     m = analyze_tx(tm, dict(good, dual=b200(a2=0.02 * 10 ** (5 / 20))))
     check(has(m, "from TX1 at equal gains"), "TX2 5 dB high fails")
 
+    print("tx sync (phase and timing)")
+    k = sync_lines()
+    marks = np.array([SYNC_MARKER1, SYNC_MARKER2])
+    others = np.concatenate([-k, marks, -marks, [0]])
+    sep = min(np.min(np.abs(kk - others)) for kk in k)
+    check(len(k) == 29 and k.min() >= -SYNC_BAND * SYNC_NB and k.max() <= SYNC_BAND * SYNC_NB and sep >= 50,
+          "29 lines within +-%.2f fs, %d bins or more from any line's image, the markers, their images "
+          "and DC" % (SYNC_BAND, sep))
+    sx1, sx2 = sync_cycle()
+    gate = np.abs(sx1[:SYNC_NB]) > 0
+    check(len(sx1) == len(sx2) == 5 * SYNC_NB and max(np.max(np.abs(sx1)), np.max(np.abs(sx2))) <= SYNC_AMP + 1e-9
+          and np.sum(gate) == SYNC_NB - 2 * SYNC_MARKER_GAP,
+          "cycle of 5 blocks, peaks %.3f/%.3f (<= %.1f), markers with silence around them"
+          % (np.max(np.abs(sx1)), np.max(np.abs(sx2)), SYNC_AMP))
+    blk = lambda x, b: x[b * SYNC_NB:(b + 1) * SYNC_NB]
+    check(all(np.allclose(blk(sx2, b + 1), blk(sx1, b + 1) * np.exp(1j * np.radians(t)))
+              for b, t in enumerate(SYNC_PHASES)), "TX2 = TX1 turned by 0, 90, 180, 270 degrees in blocks 1-4")
+    sm = tx_meta((fc, fs, f_off))
+    seps = 2e-6 * fc
+    ncap = sync_capture_len()
+
+    def sync_cap(lag=0.0, dphi=40.0, g2_db=-0.4, snr=60.0, slip=False, tx2=True, start=None):
+        """A synthetic sync capture: the file's cycles through two paths (TX1
+        2.7 samples late, TX2 lag samples later still, g2_db and dphi from
+        TX1), images, LO leakage, the radios' offset, noise snr dB below a
+        steady tone (in a 2^18 Blackman spectrum); slip: TX2 one sample
+        later from the middle on."""
+        reps = SYNC_CYCLES + 4
+        a = delayed(np.tile(sx1, reps), 2.7) * 0.02
+        b = delayed(np.tile(sx2, reps), 2.7 + lag) * 0.02 * 10 ** (g2_db / 20) * np.exp(1j * np.radians(dphi))
+        if slip:
+            b = np.concatenate([b[:len(b) // 2], b[len(b) // 2 - 1:-1]])
+        if not tx2:
+            b = 0 * b
+        z = a + b + 0.01 * np.conj(a) + 0.006 * np.conj(b) + 0.0004
+        st = int(rng.integers(0, len(sx1))) if start is None else start
+        z = z[st:st + ncap] * np.exp(2j * np.pi * seps * np.arange(ncap) / fs)
+        sig2 = (0.5 * 0.02) ** 2 * 2 ** 18 / (1.73 * 10 ** (snr / 10))
+        return z + noise(ncap, 10 * np.log10(sig2))
+
+    s0 = analyze_sync(sync_cap(), sm)
+    check(s0["lag_samples"] == 0 and abs(s0["lag_est_samples"]) < 0.01 and abs(s0["phase_at_fc_deg"] - 40) < 0.5
+          and s0["cycles"] >= SYNC_CYCLES and s0["fit_lines"] == 29 and s0["cycle_phase_spread_deg"] < 1
+          and abs(s0["marker_lag_samples"]) < 2 and abs(s0["freq_err_hz"] - seps) < 50,
+          "lag %+.4f, phase %.2f deg (40), %d cycles, %d lines, spread %.2f deg, markers' lag %+.2f, offset %.0f Hz"
+          % (s0["lag_est_samples"], s0["phase_at_fc_deg"], s0["cycles"], s0["fit_lines"],
+             s0["cycle_phase_spread_deg"], s0["marker_lag_samples"], s0["freq_err_hz"]))
+    s1 = analyze_sync(sync_cap(lag=0.17, dphi=180.0, g2_db=0.0, snr=52.0), sm)
+    check(abs(s1["lag_est_samples"] - 0.17) < 0.02 and abs(wrap_deg(s1["phase_at_fc_deg"] - 180)) < 1.5 and
+          s1["cycle_phase_spread_deg"] < PHASE_SPREAD_MAX_DEG,
+          "TX2 opposite TX1 (one block cancels), 0.17 samples late, 52 dB: lag %+.3f, phase %.1f deg, spread %.1f deg"
+          % (s1["lag_est_samples"], s1["phase_at_fc_deg"], s1["cycle_phase_spread_deg"]))
+    s2 = analyze_sync(sync_cap(lag=37.0), sm)
+    check(s2["lag_samples"] == 37 and abs(s2["marker_lag_samples"] - 37) < 3,
+          "37 samples late (the lines alone would say -4): %d, markers %+.1f"
+          % (s2["lag_samples"], s2["marker_lag_samples"]))
+    try:
+        analyze_sync(noise(ncap, -60), sm)
+        check(False, "no marker raises (retried)")
+    except RuntimeError:
+        check(True, "no marker raises (retried)")
+    sync_caps = lambda **kw: {name: [sync_cap(**kw)] for name, _ in SYNC_RUNS}
+    m = analyze_tx(sm, sync_caps())
+    check(m["pass"] and m["runs"] == [n for n, _ in SYNC_RUNS] and m["sync"]["class"] == "stable",
+          "sync runs alone pass, phases stable %s" % m["fails"])
+    m = analyze_tx(sm, sync_caps(lag=1.0))
+    check(has(m, "TX2 is 1 samples behind TX1"), "TX2 one sample late fails: %s" % m["fails"][:1])
+    m = analyze_tx(sm, sync_caps(lag=-0.4))
+    check(has(m, "TX2 lags TX1 by -0.4"), "TX2 0.4 samples early fails: %s" % m["fails"][:1])
+    m = analyze_tx(sm, sync_caps(slip=True))
+    check(has(m, "TX2's lag moved"), "a sample added on TX2 fails: %s" % m["fails"][:1])
+    m = analyze_tx(sm, sync_caps(tx2=False))
+    check(has(m, "TX2's marker is not there") and has(m, "lines"), "no TX2 fails: %s" % m["fails"][:2])
+    caps = sync_caps()
+    caps["sync1"] = [sync_cap(dphi=220.0)]
+    m = analyze_tx(sm, caps)
+    check(m["pass"] and m["sync"]["class"] == "flips by 180 deg", "a 180 degree flip after a retune: reported, pass")
+    m = analyze_tx(sm, dict(good, **sync_caps()))
+    check(m["pass"] and "single" in m and "sync" in m, "tone and sync runs together pass")
+
     print("--save / --analyze")
     with tempfile.TemporaryDirectory() as d:
         global SAVE_DIR
@@ -1202,12 +1621,15 @@ def self_test():
                 interleave_sc16([rf.to_sc16q11(np.clip(c.real, -0.99, 0.99) + 1j * np.clip(c.imag, -0.99, 0.99))
                                  for c in full]).astype("<i2").tofile(files[name])
             save_point(sm, files, {})
-            save_point(tm, {}, {k: v[0] for k, v in good.items()})
+            saved_tx = dict(good, **sync_caps())
+            save_point(dict(tm, caps={k: tm["caps"][k] for k in saved_tx}), {},
+                       {k: v[0] for k, v in saved_tx.items()})
             for f in files.values():
                 os.remove(f)
             recs = analyze_dir(d)
-            check(len(recs) == 2 and all(r["pass"] for r in recs),
-                  "both saved points analyzed and pass %s" % [r.get("fails") for r in recs])
+            check(len(recs) == 2 and all(r["pass"] for r in recs) and
+                  any(len(r.get("sync", {}).get("runs", {})) == len(SYNC_RUNS) for r in recs),
+                  "both saved points (tx with its sync runs) analyzed and pass %s" % [r.get("fails") for r in recs])
             try:
                 back = [json.loads(json.dumps(r, default=_json_default, allow_nan=False)) for r in recs]
                 check(back[0]["pass"] is True and isinstance(back[0]["fc"], float),
@@ -1235,6 +1657,11 @@ def self_test():
         check(True, "TX gain above 60 refused")
     lists = [rx_tone_cmds(meta, lambda k: "/dev/shm/x/%s.bin" % k), rx_chirp_cmds(meta, lambda k: "/dev/shm/x/bb.bin")]
     lists += [tx_cmds(tm, "/dev/shm/x/tx.bin", ch, g1, g2) for _, _, ch, g1, g2 in TX_RUNS]
+    lists += [tx_cmds(tm, "/dev/shm/x/tx-sync.bin", [1, 2], TX_GAIN, TX_GAIN,
+                      None if aw is None else tm["retune_away"][aw]) for _, aw in SYNC_RUNS]
+    check(any(c.startswith("set frequency tx2 %d" % tm["retune_away"][1]) for c in lists[-1]) and
+          lists[-1].index("set frequency tx2 %d" % tm["retune_away"][1]) <
+          lists[-1].index("set frequency tx2 %d" % tm["fc"]), "sync2 tunes away first, then to the carrier")
     words = re.compile(r"flash|fx3|jump|erase|recover|poke|calibrate|biastee|trimdac|^run\b|^load", re.I)
     check(not any(words.search(c) for cl in lists for c in cl), "no flash/FX3/bootloader/bias-tee commands")
     check(all(";" not in c for cl in lists for c in cl), "no ';' in any command")
@@ -1295,6 +1722,7 @@ def main():
         return 1 if any(not m.get("pass") for m in recs) else 0
     if not a.mode:
         ap.error("rx, tx, --analyze or --self-test is required")
+    sync_only()     # refuses a value it does not know
     if os.environ.get("HWTEST_TX") != "1":
         # rx makes the B200mini transmit, tx the bladeRF
         sys.exit("twoch-check.py transmits: set HWTEST_TX=1 only with the two-channel "
