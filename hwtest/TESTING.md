@@ -60,6 +60,11 @@ radio that transmits and measures for `bin/rf-check.py` and
 | from 2026-11-15 10:43 (Nuand's threads test, section 14) | 20 dB → 20 dB → B200mini RX2 | 50 Ω load | 50 Ω load | 50 Ω load |
 | from 2026-11-19 23:25 (the xA9 at RF, section 18) | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX | 50 Ω load | 50 Ω load |
 | from 2026-11-20 ~07:05 (the xA9's channel 2, section 18) | 50 Ω load | 50 Ω load | 20 dB → B200mini RX2 | ← 20 dB ← B200mini TX/RX |
+| from 2026-11-20 ~21:45 (the xA9's two channels at once, receive; open item 8) | 50 Ω load | ← 20 dB ← splitter ← B200mini TX/RX | 50 Ω load | ← 20 dB ← the same splitter |
+
+The splitter is a TOJOIN PS-2SM-2080 (2 to 8 GHz) with a 20 dB attenuator
+on each output (README.md, "Two-channel setups"). The B200mini's unused
+port has a 50 Ω load.
 
 Receive-only runs preload the no-TX guard (`lib/no-tx-guard.c`): nothing can
 enable a TX channel. Transmit runs (`HWTEST_TX=1`, only with one of the
