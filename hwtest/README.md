@@ -380,6 +380,14 @@ reasons in `fails`.
   fractional lags, gain steps, missing tones, the TX frequency plan, noise,
   `--save`/`--analyze`) and that every bladeRF-cli command it sends passes
   `bladerf-cli-safe` (with a stand-in for bladeRF-cli).
+* `--freqs MHZ,...` tests only those points, in that order, and `--repeat N`
+  goes through them N times (the records then carry `round`). tx keeps each
+  bladeRF-cli run's output, libbladeRF's warnings included, in its record
+  (`cli`). With `HWTEST_NIOS_TRACE_SO` (`lib/nios-trace.c` built as a shared
+  library, as `bin/ctrl-threads-nuand.sh` builds it) and
+  `HWTEST_NIOS_TRACE_DIR` set, every tx bladeRF-cli run is traced, into
+  `<dir>/<round>-<MHz>-<tuning mode>-<run>.trace` (bladeRF-cli only, not
+  twoch-check.py itself; `bin/nios-trace-threads.py` analyzes one).
 * Not run on hardware yet (written before the splitter arrived): the
   thresholds are estimates from the hardware's properties, to be revisited
   after the first runs.

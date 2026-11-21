@@ -3,9 +3,10 @@
 RX1 and RX2 at the same time, and TX1 and TX2 at the same time, through a
 2-way splitter.
 
-  twoch-check.py rx [--out results.jsonl] [--points N] [--save DIR]
-  twoch-check.py tx [--out results.jsonl] [--points N] [--save DIR]
-      with HWTEST_2CH_TX=sync only the sync runs (phase and timing)
+  twoch-check.py rx [--out results.jsonl] [--points N | --freqs MHZ,...] [--repeat N] [--save DIR]
+  twoch-check.py tx [--out results.jsonl] [--points N | --freqs MHZ,...] [--repeat N] [--save DIR]
+      with HWTEST_2CH_TX=sync only the sync runs (phase and timing);
+      --freqs: only these points, in this order; --repeat: N times through them
   twoch-check.py --analyze DIR [--out results.jsonl]
       re-analyzes the captures that --save kept in DIR (transmits nothing)
   twoch-check.py --self-test
@@ -63,6 +64,15 @@ rx), TX2's phase relative to TX1 at the carrier, and both per cycle (a lost
 or extra sample on one channel moves the lag by one). The second and third
 runs tune both TX channels elsewhere first (retune_away), so the phase over
 the three runs is reported as rx's retunes are.
+
+tx keeps each bladeRF-cli run's output, libbladeRF's warnings included, in
+its record ("cli", by run). With HWTEST_NIOS_TRACE_SO (lib/nios-trace.c built
+as a shared library, as bin/ctrl-threads-nuand.sh builds it) and
+HWTEST_NIOS_TRACE_DIR set, every tx bladeRF-cli run is traced: every Nios
+packet with its time, into <dir>/<round>-<MHz>-<tuning mode>-<run>.trace
+(named in the record, "traces"; bin/nios-trace-threads.py analyzes one). The
+shim is preloaded for bladeRF-cli only (through bin/bladerf-cli-safe), not
+for this program, whose B200mini driver uses libusb too.
 
 Every number goes into one JSON record per point and subcommand, with "pass"
 and the reasons in "fails"; the thresholds are the named constants below,
@@ -278,6 +288,8 @@ SYNC_MIN_CYCLES = 4
 RETUNE_STABLE_DEG = 5.0
 
 SAVE_DIR = None         # --save
+POINT_TAG = ""          # round, point and tuning mode, for trace file names (main)
+CLI_KEEP_CHARS = 20000  # of each bladeRF-cli run's output in the record (head and tail beyond)
 
 
 # --- Two-channel SC16 Q11 files -------------------------------------------
@@ -955,14 +967,45 @@ def analyze_tx(meta, caps):
 CLI_ERROR = re.compile(r"^\s*Error:", re.M)
 
 
-def cli(cmds, timeout=CLI_TIMEOUT_S):
+def cli_env(trace):
+    """The environment of one bladeRF-cli run: with trace (a file name),
+    HWTEST_NIOS_TRACE_SO and HWTEST_NIOS_TRACE_DIR, this program's plus the
+    Nios trace shim in LD_PRELOAD and NIOS_TRACE_FILE; else None (this
+    program's own)."""
+    so, d = os.environ.get("HWTEST_NIOS_TRACE_SO"), os.environ.get("HWTEST_NIOS_TRACE_DIR")
+    if not (trace and so and d):
+        return None
+    env = dict(os.environ)
+    env["LD_PRELOAD"] = env["LD_PRELOAD"] + ":" + so if env.get("LD_PRELOAD") else so
+    env["NIOS_TRACE_FILE"] = os.path.join(d, trace)
+    return env
+
+
+def trace_name(run):
+    """The trace file of one tx bladeRF-cli run, or None when not tracing."""
+    if not (os.environ.get("HWTEST_NIOS_TRACE_SO") and os.environ.get("HWTEST_NIOS_TRACE_DIR")):
+        return None
+    return "%s-%s.trace" % (POINT_TAG, run)
+
+
+def keep_text(s):
+    """s for a record: all of it up to CLI_KEEP_CHARS, else its head and tail."""
+    s = s.strip()
+    if len(s) <= CLI_KEEP_CHARS:
+        return s
+    h = CLI_KEEP_CHARS // 2
+    return s[:h] + "\n[... %d characters left out ...]\n" % (len(s) - 2 * h) + s[-h:]
+
+
+def cli(cmds, timeout=CLI_TIMEOUT_S, trace=None):
     """bladeRF-cli through bin/bladerf-cli-safe, like rf-check.run_cli(), but
     also failing on bladeRF-cli's error lines: it stops at the first command
-    that fails and still exits 0 (its input loop always returns 0)."""
+    that fails and still exits 0 (its input loop always returns 0). trace:
+    the Nios trace's file name (cli_env)."""
     args = [rf.CLI]
     for c in cmds:
         args += ["-e", c]
-    p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=cli_env(trace))
     if p.returncode != 0 or CLI_ERROR.search(p.stderr):
         raise RuntimeError("bladeRF-cli failed (%d): %s %s"
                            % (p.returncode, p.stdout[-1500:], p.stderr[-1500:]))
@@ -1175,11 +1218,12 @@ def sync_present(y, meta):
     return lev >= floor + TONE_SNR_DB
 
 
-def tx_run(u, meta, path, chans, g1, g2, away=None, sync=False):
+def tx_run(u, meta, path, chans, g1, g2, away=None, sync=False, trace=None):
     """One bladeRF transmission (bladeRF-cli in a thread, as rf-check.check_tx)
     and the B200mini capture to measure it; returns (capture, seconds until
-    the first tone). sync: the sync file, the B200mini tuned to the carrier,
-    a capture of sync_capture_len() samples."""
+    the first tone, bladeRF-cli's output). sync: the sync file, the B200mini
+    tuned to the carrier, a capture of sync_capture_len() samples. trace: the
+    Nios trace's file name (cli_env)."""
     fc = meta["fc"]
     want = ["t%d" % ch for ch in chans]
     n_find = int(meta["fs_b200"] * B200_CAPTURE_S)
@@ -1193,7 +1237,7 @@ def tx_run(u, meta, path, chans, g1, g2, away=None, sync=False):
 
     def bladerf_tx():
         try:
-            result["out"] = cli(tx_cmds(meta, path, chans, g1, g2, away))
+            result["out"] = cli(tx_cmds(meta, path, chans, g1, g2, away), trace=trace)
         except Exception as e:      # re-raised below
             result["error"] = e
 
@@ -1221,7 +1265,7 @@ def tx_run(u, meta, path, chans, g1, g2, away=None, sync=False):
                            % "+".join(str(c) for c in chans))
     if ended:
         raise RuntimeError("the bladeRF transmission ended during the measurement")
-    return y, found
+    return y, found, result.get("out", "")
 
 
 def sync_only():
@@ -1236,24 +1280,45 @@ def check_tx(u, point):
     """bladeRF transmits (the tone runs: both channels, TX2 lower, each
     alone; the sync runs), B200mini measures."""
     meta = tx_meta(point)
-    caps, found = {}, {}
+    caps, found, outs, traces = {}, {}, {}, {}
     with work_dir() as d:
         if not sync_only():
             files = write_tx_files(meta, d)
             for name, fname, chans, g1, g2 in TX_RUNS:
-                y, found[name] = tx_run(u, meta, files[fname], chans, g1, g2)
+                traces[name] = trace_name(name)
+                y, found[name], outs[name] = tx_run(u, meta, files[fname], chans, g1, g2,
+                                                    trace=traces[name])
                 caps[name] = [y]
         path = write_sync_file(meta, d)
         for name, away in SYNC_RUNS:
-            y, found[name] = tx_run(u, meta, path, [1, 2], TX_GAIN, TX_GAIN, sync=True,
-                                    away=None if away is None else meta["retune_away"][away])
+            traces[name] = trace_name(name)
+            y, found[name], outs[name] = tx_run(
+                u, meta, path, [1, 2], TX_GAIN, TX_GAIN, sync=True,
+                away=None if away is None else meta["retune_away"][away], trace=traces[name])
             caps[name] = [y]
     meta["caps"] = {k: v for k, v in meta["caps"].items() if k in caps}
     if SAVE_DIR:
         save_point(meta, {}, {k: v[0] for k, v in caps.items()})
     m = analyze_tx(meta, caps)
     m["tone_after_s"] = found
+    m["cli"] = {k: keep_text(v) for k, v in outs.items()}
+    if any(traces.values()):
+        m["traces"] = traces
     return m
+
+
+def pick_points(spec):
+    """--freqs: the TWOCH_POINTS at these frequencies (MHz, comma-separated),
+    in this order."""
+    pts = []
+    for s in spec.split(","):
+        f = float(s) * 1e6
+        p = [q for q in TWOCH_POINTS if abs(q[0] - f) < 0.5e6]
+        if not p:
+            raise ValueError("--freqs: %s MHz is not one of the points (%s)"
+                             % (s, ", ".join("%g" % (q[0] / 1e6) for q in TWOCH_POINTS)))
+        pts.append(p[0])
+    return pts
 
 
 # --- --analyze ------------------------------------------------------------
@@ -1669,6 +1734,39 @@ def self_test():
     env.pop("HWTEST_TX", None)
     p = subprocess.run([sys.executable, os.path.abspath(__file__), "rx"], capture_output=True, text=True, env=env)
     check(p.returncode != 0 and "HWTEST_TX=1" in p.stderr, "refuses to run without HWTEST_TX=1")
+    check([q[0] for q in pick_points("3500,5800")] == [3500e6, 5800e6], "--freqs: 3500 and 5800 MHz, in that order")
+    check(pick_points("1575.42")[0][0] == 1575.42e6, "--freqs: 1575.42 MHz")
+    try:
+        pick_points("2400")
+        check(False, "--freqs refuses a frequency that is not a point")
+    except ValueError:
+        check(True, "--freqs refuses a frequency that is not a point")
+    keys = ("HWTEST_NIOS_TRACE_SO", "HWTEST_NIOS_TRACE_DIR", "LD_PRELOAD")
+    saved = {k: os.environ.get(k) for k in keys}
+    global POINT_TAG
+    tag = POINT_TAG
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        check(cli_env("x.trace") is None and trace_name("dual") is None,
+              "no Nios trace without HWTEST_NIOS_TRACE_SO and _DIR")
+        os.environ.update(HWTEST_NIOS_TRACE_SO="/t/trace.so", HWTEST_NIOS_TRACE_DIR="/d",
+                          LD_PRELOAD="/c/cap.so")
+        POINT_TAG = "03-5800-fpga"
+        e = cli_env(trace_name("dual"))
+        check(e is not None and e["LD_PRELOAD"] == "/c/cap.so:/t/trace.so" and
+              e["NIOS_TRACE_FILE"] == "/d/03-5800-fpga-dual.trace" and "NIOS_TRACE_FILE" not in os.environ,
+              "a traced run: the shim after the TX cap in LD_PRELOAD, a trace file of its own")
+        check(cli_env(None) is None, "no Nios trace for a run without a trace name")
+    finally:
+        POINT_TAG = tag
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check(keep_text(" a\n") == "a" and len(keep_text("b" * 50000)) < CLI_KEEP_CHARS + 100,
+          "bladeRF-cli output kept whole, or its head and tail")
     bash = shutil.which("bash", path="/bin:/usr/bin")
     if bash is None:
         print("  skip bladerf-cli-safe (no bash)")
@@ -1677,7 +1775,7 @@ def self_test():
             fake = os.path.join(d, "output", "bladeRF-cli")
             os.makedirs(os.path.dirname(fake))
             with open(fake, "w") as f:
-                f.write("#!/bin/sh\necho FAKE-BLADERF-CLI-OK\n")
+                f.write("#!/bin/sh\necho FAKE-BLADERF-CLI-OK \"${NIOS_TRACE_FILE:-}\"\n")
             os.chmod(fake, 0o755)
             # bladerf-cli-safe runs "$HOST_BUILD/output/bladeRF-cli" (an absolute
             # path): with HOST_BUILD here that is the fake, never a real one
@@ -1695,6 +1793,10 @@ def self_test():
                   % [q.stderr.strip()[-200:] for q in ok if q.returncode != 0])
             q = safe(["flash_image x"])
             check(q.returncode == 97 and "FAKE" not in q.stdout, "bin/bladerf-cli-safe still refuses flash_image")
+            env["NIOS_TRACE_FILE"] = "/d/x.trace"
+            q = safe(["version"])
+            check(q.returncode == 0 and "FAKE-BLADERF-CLI-OK /d/x.trace" in q.stdout,
+                  "bin/bladerf-cli-safe passes NIOS_TRACE_FILE on to bladeRF-cli")
     print("self-test: %s" % ("PASS" if not bad else "%d FAILED" % len(bad)))
     return len(bad)
 
@@ -1706,6 +1808,10 @@ def main():
     ap.add_argument("--out", default="-")
     ap.add_argument("--points", type=int, default=len(TWOCH_POINTS),
                     help="only the first N frequency points")
+    ap.add_argument("--freqs", metavar="MHZ,...",
+                    help="only these frequency points (MHz, of TWOCH_POINTS), in this order")
+    ap.add_argument("--repeat", type=int, default=1, metavar="N",
+                    help="go through the points N times")
     ap.add_argument("--save", help="directory for the raw captures and a manifest per point")
     ap.add_argument("--analyze", metavar="DIR", help="re-analyze what --save kept in DIR (transmits nothing)")
     ap.add_argument("--self-test", action="store_true", help="check the analysis on synthetic signals")
@@ -1722,35 +1828,48 @@ def main():
         return 1 if any(not m.get("pass") for m in recs) else 0
     if not a.mode:
         ap.error("rx, tx, --analyze or --self-test is required")
+    points = TWOCH_POINTS[:a.points]
+    if a.freqs:
+        try:
+            points = pick_points(a.freqs)
+        except ValueError as e:
+            ap.error(str(e))
+    if a.repeat < 1:
+        ap.error("--repeat must be 1 or more")
     sync_only()     # refuses a value it does not know
     if os.environ.get("HWTEST_TX") != "1":
         # rx makes the B200mini transmit, tx the bladeRF
         sys.exit("twoch-check.py transmits: set HWTEST_TX=1 only with the two-channel "
                  "cabling in README.md (attenuators, no antennas)")
-    global SAVE_DIR
+    global SAVE_DIR, POINT_TAG
     SAVE_DIR = a.save
     u = rf.usrp()
     fn = check_rx if a.mode == "rx" else check_tx
+    mode = os.environ.get("BLADERF_DEFAULT_TUNING_MODE") or "default"
     fails = 0
-    for point in TWOCH_POINTS[:a.points]:
-        errors = []
-        for _ in range(TRIES):      # retry captures that dropped samples
-            try:
-                m = fn(u, point)
-                break
-            except Exception as e:  # keep going; record the failure
-                errors.append(str(e))
-        else:
-            m = {"test": "twoch_" + a.mode, "fc": point[0], "fs": point[1],
-                 "pass": False, "fails": errors[-1:], "error": errors[-1]}
-        m["retries"] = len(errors) if "error" not in m else TRIES - 1
-        if errors:
-            m["retry_errors"] = errors
-        m["time"] = time.time()
-        m["tuning_mode"] = os.environ.get("BLADERF_DEFAULT_TUNING_MODE", "")
-        if not m.get("pass"):
-            fails += 1
-        write_record(out, m)
+    for rnd in range(1, a.repeat + 1):
+        for point in points:
+            errors = []
+            for k in range(TRIES):      # retry captures that dropped samples
+                POINT_TAG = "%02d-%g-%s%s" % (rnd, point[0] / 1e6, mode, "-try%d" % (k + 1) if k else "")
+                try:
+                    m = fn(u, point)
+                    break
+                except Exception as e:  # keep going; record the failure
+                    errors.append(str(e))
+            else:
+                m = {"test": "twoch_" + a.mode, "fc": point[0], "fs": point[1],
+                     "pass": False, "fails": errors[-1:], "error": errors[-1]}
+            m["retries"] = len(errors) if "error" not in m else TRIES - 1
+            if errors:
+                m["retry_errors"] = errors
+            if a.repeat > 1:
+                m["round"] = rnd
+            m["time"] = time.time()
+            m["tuning_mode"] = os.environ.get("BLADERF_DEFAULT_TUNING_MODE", "")
+            if not m.get("pass"):
+                fails += 1
+            write_record(out, m)
     return 1 if fails else 0
 
 
