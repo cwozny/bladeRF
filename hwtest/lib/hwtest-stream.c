@@ -89,6 +89,9 @@
  *
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
+ * -w BW sets the analog bandwidth of the channels used once the sample rates
+ * are set (before -1 and -R).
+ * -X N makes loopback print its first N received samples after the warm-up.
  * -1 puts the AD9361-FPGA interface in 1R1T mode once the sample rates are set
  * (bladerf_set_rfic_1r1t, looked up at run time; one RX and one TX channel,
  * half the 2R2T interface clock; x1 on channel 1 only; needs an FPGA with
@@ -134,6 +137,8 @@ struct opts {
     uint8_t poke_val[8];
     bool dump_rfic;                    /* -D: print AD9361 registers after setup */
     bool r1;                           /* -1: AD9361 interface in 1R1T mode */
+    unsigned lb_dump;                  /* -X N: loopback prints its first N RX samples */
+    double bw;                         /* -w: analog bandwidth (0: libbladeRF's) */
     int ch;                     /* 0 or 1 (x1 only) */
     double rate, seconds, freq, gain, tone, warmup;
     double burst_ms, lead_ms, gap_ms;  /* rxsched */
@@ -285,6 +290,21 @@ static int setup_channels(struct bladerf *dev, const struct opts *o, bool rx,
                    o->rate);
             /* the harness's TX cap (lib/tx-cap.c) still applies on enable */
             CHECK(bladerf_set_gain(dev, ch, (bladerf_gain)(o->have_gain ? o->gain : 0)));
+        }
+    }
+    /* -w: after the sample rates (libbladeRF's OVERSAMPLE register setup
+     * clears the analog filter settings on every rate change) */
+    for (k = 0; o->bw > 0 && k < nch(o); k++) {
+        int c = slot_ch(o, k), d;
+        for (d = 0; d < 2; d++) {
+            bladerf_bandwidth actual = 0;
+            bladerf_channel ch = d == 0 ? BLADERF_CHANNEL_RX(c) : BLADERF_CHANNEL_TX(c);
+            if ((d == 0 && !rx) || (d == 1 && !tx)) {
+                continue;
+            }
+            CHECK(bladerf_set_bandwidth(dev, ch, (bladerf_bandwidth)o->bw, &actual));
+            printf("%s%d: bandwidth %u (requested %.0f)\n", d == 0 ? "RX" : "TX", c + 1,
+                   actual, o->bw);
         }
     }
     /* -1: after the sample rates; looked up at run time, so this program
@@ -876,6 +896,7 @@ struct lbctx {
     struct seq s[2];
     uint64_t tag_errors, warmup;    /* samples per channel not checked */
     unsigned n;
+    unsigned dumped;                /* -X: samples printed so far */
 };
 
 static void *lb_tx_cb(struct bladerf *dev, struct bladerf_stream *stream,
@@ -922,6 +943,12 @@ static void *lb_rx_cb(struct bladerf *dev, struct bladerf_stream *stream,
             int k = (int)(j % nch(o)), tag;
             get_iq(o, samples, j, &i, &q);
             v = pattern_value(o, i, q, &tag, &mask);
+            if (o->lb_dump > 0 && c->dumped < o->lb_dump) {
+                /* -X N: the first N received samples after the warm-up */
+                printf("  rx %4u: i 0x%03x q 0x%03x -> value 0x%06" PRIx64 " tag %d\n",
+                       c->dumped, i, q, v, tag);
+                c->dumped++;
+            }
             if (c->s[k].locked && tag != k && c->tag_errors++ < MAX_REPORTS) {
                 printf("  slot %d sample %" PRIu64 ": channel tag %d\n", k,
                        c->count + j / nch(o), tag);
@@ -2160,7 +2187,8 @@ static void usage(void)
             "  -b BURST_MS  -L LEAD_MS | -N  -G GAP_MS  -S NBUF,SAMPLES,NXFER (rxsched)\n"
             "  -A (loopback in the AD9361)  -R ADDR=VAL (set an AD9361 register after\n"
             "  setup, up to 8)  -D (print AD9361 registers after setup)  -v (verbose)\n"
-            "  -1 (AD9361 interface in 1R1T mode: x1 on channel 1 only)\n");
+            "  -1 (AD9361 interface in 1R1T mode: x1 on channel 1 only)  -w BW (analog\n"
+            "  bandwidth)  -X N (loopback: print the first N received samples)\n");
 }
 
 int main(int argc, char **argv)
@@ -2183,7 +2211,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:AR:D1")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:AR:D1X:w:")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -2220,6 +2248,8 @@ int main(int argc, char **argv)
             case 'A': o.lb_rfic = true; break;
             case 'D': o.dump_rfic = true; break;
             case '1': o.r1 = true; break;
+            case 'X': o.lb_dump = (unsigned)atoi(optarg); break;
+            case 'w': o.bw = parse_num(optarg); break;
             case 'R': {
                 char *eq = strchr(optarg, '='), *end1 = NULL, *end2 = NULL;
                 unsigned long a, v;
