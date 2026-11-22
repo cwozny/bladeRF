@@ -45,6 +45,7 @@ entity fifo_reader is
         packet_en           :   in      std_logic;
         eight_bit_mode_en   :   in      std_logic;
         highly_packed_mode_en : in      std_logic;
+        back_to_back_en     :   in      std_logic := '0';
         timestamp           :   in      unsigned(63 downto 0);
 
         fifo_usedw          :   in      std_logic_vector(FIFO_USEDW_WIDTH-1 downto 0);
@@ -708,13 +709,20 @@ begin
         end if;
 
         -- Output assignments
-        fifo_read   <= fifo_current.fifo_read;
         out_samples <= fifo_current.out_samples;
 
         packet_control <= fifo_current.packet_control;
 
     end process;
 
+
+    -- The FIFO read strobe. Data requests normally come at most every other
+    -- clock, and the registered strobe advances the FIFO in time. With
+    -- back_to_back_en (one sample per clock, as in the AD9361's 1R1T mode) the
+    -- request after the last sample of a FIFO word comes on the next clock, so
+    -- the FIFO must advance in the same cycle.
+    fifo_read <= fifo_future.fifo_read when back_to_back_en = '1' else
+                 fifo_current.fifo_read;
 
     -- ------------------------------------------------------------------------
     -- UNDERFLOW
