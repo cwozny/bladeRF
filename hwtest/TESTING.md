@@ -653,7 +653,7 @@ adsb) and fe4bb32d (foxhunt), with Nuand's code (master 35174c30) built with
   every failing endpoint (564 in Nuand's, 567 in ours, TNS −1,887 / −1,904
   ns) is reset by `wlan_rx`'s `rst_rr(0)`, a reset synchronized to the
   80 MHz clock and used as the asynchronous reset of 40 MHz (sample clock)
-  logic (upstream draft 13; `recovery-groups.tcl`).
+  logic (upstream issue [bladeRF-wiphy #16]; `recovery-groups.tcl`).
 - **adsb** has not built since 2025.05 (upstream issue [#1117]): it needs
   Nuand/bladeRF-adsb in `hdl/fpga/ip/nuand/adsb` and two one-line fixes
   (branch `adsb-fix`), applied to the working trees for these builds.
@@ -901,7 +901,7 @@ sample transfers and frequency calls in the trace):
   answering (below).
 
 **The test's own race: test_gain's 420 MHz** (not changed on `host-fixes`;
-upstream draft 7f). Before it tests a channel, test_gain sets it to 420 MHz,
+upstream [#1137]). Before it tests a channel, test_gain sets it to 420 MHz,
 a 2018 workaround for FPGA v0.10.2 (d1a9c8e1). In the threads test the gain
 thread does that 75 times per channel while the frequency thread sets and
 reads back frequencies on the same channels, and RX1 and RX2 share the
@@ -1458,7 +1458,7 @@ transfers in flight), late by 1 to 16 buffers, in 7 of 10 starts at SC16
 overclocked; the campaign's `rx_order` (SC16, 61.44 Msps, 10 starts per run)
 found a late buffer in 3 to 8 of 10 starts in every run, with every image
 and either build. That is libbladeRF's start-up reordering (section 7's
-`rx_order`; upstream draft I9), which rxcheck skips with its 0.25 s warm-up.
+`rx_order`; upstream [#1139]), which rxcheck skips with its 0.25 s warm-up.
 rxcap now warms up the same way (2d8f306a). The six runs again with it
 (`plans/ocrx2-xA9-20261120.txt`, job script `xa9-ocrx2.sh`, results
 `results/xA9-{A,B,C}-ocrx2{,-fixes}/`; the patched hwtest-stream built on
@@ -2067,7 +2067,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    the bench terminates TX1 and has no DC block. The bench images differ
    from it in those two lines only (section 12).
 6. The first one to four bursts after a stream starts can overrun, on every
-   image (section 10; upstream draft 9).
+   image (section 10; upstream issue [#1139]).
 7. Seen in Nuand's designs, not caused by these changes: foxhunt keys at
    twice the speed its firmware asks for, and Nuand's Nios II/e `usleep()`
    runs about 40 % long (section 12); the wlan revision fails recovery timing
@@ -2147,7 +2147,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     from host stalls (section 17). Probable cause: its RX FIFO is exactly
     one GPIF buffer deep, so the GPIF reads only when the FIFO is full.
     Nuand's own build (Quartus 23.1.1, Nios II) loses frames the same way;
-    a deeper FIFO has not been tried. Upstream draft I21.
+    a deeper FIFO has not been tried. Upstream issue [#1143].
 15. Overclocked transmit (122.88 Msps, past the 80 Msps up to which the
     xA9's data port carries every TX bit, section 17) sometimes reaches the
     B200mini with glitches. Short false pulses (tens of ns) came in about
@@ -2185,7 +2185,7 @@ On the test host, with the harness checked out at `~/workarea/hwtest`
 Add `HOST_BUILD=<fixes build> HWTEST_FIXES=1` to test with the libbladeRF
 fixes.
 
-<!-- Upstream issues and pull requests (Nuand/bladeRF, posted 2026-11-21) -->
+<!-- Links to the upstream issues and pull requests (posted 2026-11-21) -->
 [#1025]: https://github.com/Nuand/bladeRF/issues/1025
 [#1060]: https://github.com/Nuand/bladeRF/pull/1060
 [#1108]: https://github.com/Nuand/bladeRF/issues/1108
@@ -2208,3 +2208,7 @@ fixes.
 [#1131]: https://github.com/Nuand/bladeRF/pull/1131
 [#1134]: https://github.com/Nuand/bladeRF/pull/1134
 [#1135]: https://github.com/Nuand/bladeRF/pull/1135
+[#1137]: https://github.com/Nuand/bladeRF/issues/1137
+[#1139]: https://github.com/Nuand/bladeRF/issues/1139
+[#1143]: https://github.com/Nuand/bladeRF/issues/1143
+[bladeRF-wiphy #16]: https://github.com/Nuand/bladeRF-wiphy/issues/16
