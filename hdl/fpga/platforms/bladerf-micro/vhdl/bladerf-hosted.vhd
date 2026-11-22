@@ -623,9 +623,24 @@ begin
             dac_controls(i).data_req <= (ad9361.ch(i).dac.i.valid  or ad9361.ch(i).dac.q.valid  or tx_loopback_enabled) and
                                         mimo_tx_enables(i);
 
+            -- In 1R1T mode the core sends its channel 0 to whichever AD9361
+            -- TX channel is on, so both slots follow the channel 0 controls,
+            -- and the MIMO TX enables pick the slot that streams
+            if( dac_r1_mode = '1' ) then
+                dac_controls(i).enable   <= (ad9361.ch(0).dac.i.enable or ad9361.ch(0).dac.q.enable or tx_loopback_enabled) and
+                                            mimo_tx_enables(i);
+                dac_controls(i).data_req <= (ad9361.ch(0).dac.i.valid  or ad9361.ch(0).dac.q.valid  or tx_loopback_enabled) and
+                                            mimo_tx_enables(i);
+            end if;
+
             if (rising_edge(tx_clock) and dac_streams(i).data_v = '1') then
-                ad9361.ch(i).dac.i.data  <= std_logic_vector(dac_streams(i).data_i(11 downto 0)) & "0000";
-                ad9361.ch(i).dac.q.data  <= std_logic_vector(dac_streams(i).data_q(11 downto 0)) & "0000";
+                if( dac_r1_mode = '1' ) then
+                    ad9361.ch(0).dac.i.data  <= std_logic_vector(dac_streams(i).data_i(11 downto 0)) & "0000";
+                    ad9361.ch(0).dac.q.data  <= std_logic_vector(dac_streams(i).data_q(11 downto 0)) & "0000";
+                else
+                    ad9361.ch(i).dac.i.data  <= std_logic_vector(dac_streams(i).data_i(11 downto 0)) & "0000";
+                    ad9361.ch(i).dac.q.data  <= std_logic_vector(dac_streams(i).data_q(11 downto 0)) & "0000";
+                end if;
             end if;
         end loop;
     end process;
@@ -707,14 +722,15 @@ begin
             adc_streams(i).data_q    <= signed(ad9361.ch(i).adc.q.data);
             adc_streams(i).data_v    <= (ad9361.ch(i).adc.i.valid  or ad9361.ch(i).adc.q.valid) and not adc_streams_last_v(i);
 
-            -- In 1R1T mode the core's valid is high every clock, and only its
-            -- channel 0 carries samples
+            -- In 1R1T mode the core's valid is high every clock, and its
+            -- channel 0 carries the samples of whichever AD9361 RX channel is
+            -- on. Both slots get them, and the MIMO RX enables pick the slot
+            -- that streams.
             if( adc_r1_mode = '1' ) then
-                if( i = 0 ) then
-                    adc_streams(i).data_v <= ad9361.ch(i).adc.i.valid or ad9361.ch(i).adc.q.valid;
-                else
-                    adc_streams(i).data_v <= '0';
-                end if;
+                adc_controls(i).enable <= (ad9361.ch(0).adc.i.enable or ad9361.ch(0).adc.q.enable) and mimo_rx_enables(i);
+                adc_streams(i).data_i  <= signed(ad9361.ch(0).adc.i.data);
+                adc_streams(i).data_q  <= signed(ad9361.ch(0).adc.q.data);
+                adc_streams(i).data_v  <= ad9361.ch(0).adc.i.valid or ad9361.ch(0).adc.q.valid;
             end if;
         end loop;
     end process;
