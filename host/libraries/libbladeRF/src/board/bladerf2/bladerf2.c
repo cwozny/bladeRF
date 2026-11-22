@@ -817,6 +817,13 @@ static int bladerf2_enable_module(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    /* 1R1T mode carries only RX1 and TX1 */
+    if (enable && board_data->rfic_1r1t && ch != BLADERF_CHANNEL_RX(0) &&
+        ch != BLADERF_CHANNEL_TX(0)) {
+        log_error("%s: only RX1 and TX1 can stream in 1R1T mode\n", __FUNCTION__);
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
     return board_data->rfic->enable_module(dev, ch, enable);
 }
 
