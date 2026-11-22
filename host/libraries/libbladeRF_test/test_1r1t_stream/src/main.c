@@ -1,8 +1,8 @@
 /*
- * test_1r1t_stream: checks that RX1 of a bladeRF 2.0 micro streams every
- * sample at 122.88 Msps in 1R1T mode.
+ * test_1r1t_stream: checks that one RX channel of a bladeRF 2.0 micro streams
+ * every sample at 122.88 Msps in 1R1T mode.
  *
- * With OVERSAMPLE and SC8_Q7, RX1 streams the FPGA's 32-bit counter (bits
+ * With OVERSAMPLE and SC8_Q7, RX1 or RX2 streams the FPGA's 32-bit counter (bits
  * 15..0 in I and Q) through the 1R1T path of the FPGA, the USB link and
  * libbladeRF. After a short start, every sample must be the previous one plus
  * one, and the samples must arrive at 122.88 Msps (1 % tolerance). With the
@@ -40,9 +40,10 @@
 
 void print_usage(const char *prog_name)
 {
-    printf("Usage: %s [-h] [-v] [-t seconds] [-m mode]\n", prog_name);
+    printf("Usage: %s [-h] [-v] [-c channel] [-t seconds] [-m mode]\n", prog_name);
     printf("  -h    Show this help message\n");
     printf("  -v    Enable verbose logging\n");
+    printf("  -c    RX channel (1 or 2, default: 1)\n");
     printf("  -t    Seconds to check (default: 10)\n");
     printf("  -m    1R1T mode selection: auto (default), off or on\n");
 }
@@ -59,6 +60,7 @@ int main(int argc, char *argv[])
 {
     int status = 0;
     struct bladerf *dev = NULL;
+    bladerf_channel channel = BLADERF_CHANNEL_RX(0);
     bladerf_rfic_1r1t_mode mode = BLADERF_RFIC_1R1T_AUTO;
     double seconds = 10.0;
     int8_t *samples = NULL;
@@ -77,6 +79,7 @@ int main(int argc, char *argv[])
     struct option longopts[] = {
         {"help", no_argument, 0, 'h'},
         {"verbose", no_argument, 0, 'v'},
+        {"channel", required_argument, 0, 'c'},
         {"time", required_argument, 0, 't'},
         {"mode", required_argument, 0, 'm'},
         {0, 0, 0, 0}
@@ -84,13 +87,20 @@ int main(int argc, char *argv[])
 
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
 
-    while ((opt = getopt_long(argc, argv, "hvt:m:", longopts, &opt_ind)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hvc:t:m:", longopts, &opt_ind)) != -1) {
         switch (opt) {
             case 'h':
                 print_usage(argv[0]);
                 return EXIT_SUCCESS;
             case 'v':
                 bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_VERBOSE);
+                break;
+            case 'c':
+                if (strcmp(optarg, "1") != 0 && strcmp(optarg, "2") != 0) {
+                    print_usage(argv[0]);
+                    return EXIT_FAILURE;
+                }
+                channel = BLADERF_CHANNEL_RX(atoi(optarg) - 1);
                 break;
             case 't':
                 seconds = atof(optarg);
@@ -125,16 +135,16 @@ int main(int argc, char *argv[])
     CHECK_STATUS(bladerf_open(&dev, NULL));
     CHECK_STATUS(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
     CHECK_STATUS(bladerf_set_rfic_1r1t_mode(dev, mode));
-    CHECK_STATUS(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), SAMPLE_RATE,
-                                         NULL));
+    CHECK_STATUS(bladerf_set_sample_rate(dev, channel, SAMPLE_RATE, NULL));
     CHECK_STATUS(bladerf_set_rx_mux(dev, BLADERF_RX_MUX_32BIT_COUNTER));
     CHECK_STATUS(bladerf_sync_config(dev, BLADERF_RX_X1, BLADERF_FORMAT_SC8_Q7,
                                      256, 32768, 32, 1000));
-    CHECK_STATUS(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true));
+    CHECK_STATUS(bladerf_enable_module(dev, channel, true));
     CHECK_STATUS(bladerf_get_rfic_1r1t(dev, &r1t));
 
-    printf("RX1, OVERSAMPLE, %.2f Msps, SC8_Q7, FPGA counter, %s mode, %.0f s\n",
-           SAMPLE_RATE / 1e6, r1t ? "1R1T" : "2R2T", seconds);
+    printf("RX%d, OVERSAMPLE, %.2f Msps, SC8_Q7, FPGA counter, %s mode, %.0f s\n",
+           (channel == BLADERF_CHANNEL_RX(0)) ? 1 : 2, SAMPLE_RATE / 1e6,
+           r1t ? "1R1T" : "2R2T", seconds);
 
     /* Skip the start, where libbladeRF can deliver buffers out of order */
     for (n = 0; n < WARMUP_READS; n++) {
@@ -187,7 +197,7 @@ int main(int argc, char *argv[])
 
 error:
     if (dev) {
-        bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+        bladerf_enable_module(dev, channel, false);
         bladerf_set_rx_mux(dev, BLADERF_RX_MUX_BASEBAND);
         bladerf_close(dev);
     }

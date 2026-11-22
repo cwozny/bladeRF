@@ -2,13 +2,14 @@
  * test_1r1t_state: checks how libbladeRF chooses the RFIC digital interface
  * mode (bladerf_set_rfic_1r1t_mode()) on a bladeRF 2.0 micro.
  *
- * Bit 7 of the AD9361 registers 0x003 (RX2) and 0x002 (TX2) is off in 1R1T
- * mode and on in 2R2T mode, and bladerf_get_rfic_1r1t() must agree. RX2
- * streams from the FPGA's counter for a moment; nothing is transmitted (the
- * TX2 enable attempts must be refused).
+ * Bits 7:6 of the AD9361 registers 0x003 (RX) and 0x002 (TX) show the mode:
+ * 01 is 1R1T mode on channel 1, 10 is 1R1T mode on channel 2, 11 is 2R2T
+ * mode, and bladerf_get_rfic_1r1t() must agree. RX1 and RX2 stream from the
+ * FPGA's counter for a moment. TX1 and TX2 are enabled for a moment without
+ * samples: run it only with both TX ports terminated.
  *
  * With an FPGA image older than v0.17.0, the test checks that AUTO stays in
- * 2R2T mode and that ON is refused.
+ * 2R2T mode and that ON is refused; nothing is transmitted then.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,21 +32,33 @@ void print_usage(const char *prog_name)
     printf("  -v    Enable verbose logging\n");
 }
 
-/* Check that the interface is in 1R1T mode (r1t) or in 2R2T mode */
-static int expect_mode(struct bladerf *dev, const char *step, bool r1t)
+/* AD9361 channel enable bits (7:6 of 0x003 and 0x002) */
+static uint8_t channel_bits(bool r1t, int ch)
+{
+    if (!r1t) {
+        return 0xc0;
+    }
+
+    return (ch == 1) ? 0x40 : 0x80;
+}
+
+/* Check that the interface is in 1R1T mode (r1t) on RX channel rx_ch and TX
+ * channel tx_ch (1 or 2), or in 2R2T mode */
+static int expect_mode(struct bladerf *dev, const char *step, bool r1t,
+                       int rx_ch, int tx_ch)
 {
     int status;
-    uint8_t rx      = 0;
-    uint8_t tx      = 0;
-    bool enabled    = !r1t;
-    uint8_t wanted  = r1t ? 0x40 : 0xc0;
+    uint8_t rx   = 0;
+    uint8_t tx   = 0;
+    bool enabled = !r1t;
     bool ok;
 
     CHECK_STATUS(bladerf_get_rfic_register(dev, 0x003, &rx));
     CHECK_STATUS(bladerf_get_rfic_register(dev, 0x002, &tx));
     CHECK_STATUS(bladerf_get_rfic_1r1t(dev, &enabled));
 
-    ok = enabled == r1t && (rx & 0xc0) == wanted && (tx & 0xc0) == wanted;
+    ok = enabled == r1t && (rx & 0xc0) == channel_bits(r1t, rx_ch) &&
+         (tx & 0xc0) == channel_bits(r1t, tx_ch);
     printf("%-50s %s: 0x003 = 0x%02x, 0x002 = 0x%02x: %s\n", step,
            enabled ? "1R1T" : "2R2T", rx, tx, ok ? "pass" : "FAIL");
     failures += ok ? 0 : 1;
@@ -136,16 +149,30 @@ static int test_unsupported(struct bladerf *dev)
     CHECK_STATUS(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
     CHECK_STATUS(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0),
                                          RATE_OVERSAMPLE, NULL));
-    CHECK_STATUS(expect_mode(dev, "AUTO, OVERSAMPLE, 122.88 Msps", false));
+    CHECK_STATUS(expect_mode(dev, "AUTO, OVERSAMPLE, 122.88 Msps", false, 1, 1));
 
     expect_status("ON", bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_ON),
                   BLADERF_ERR_UNSUPPORTED);
-    CHECK_STATUS(expect_mode(dev, "after ON was refused", false));
+    CHECK_STATUS(expect_mode(dev, "after ON was refused", false, 1, 1));
 
     expect_status("OFF", bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_OFF),
                   0);
     expect_status("AUTO", bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_AUTO),
                   0);
+
+error:
+    return status;
+}
+
+/* Enable ch for a moment and check the mode while it is on */
+static int expect_enabled(struct bladerf *dev, bladerf_channel ch,
+                          const char *step, bool r1t, int rx_ch, int tx_ch)
+{
+    int status;
+
+    CHECK_STATUS(bladerf_enable_module(dev, ch, true));
+    status = expect_mode(dev, step, r1t, rx_ch, tx_ch);
+    bladerf_enable_module(dev, ch, false);
 
 error:
     return status;
@@ -157,38 +184,64 @@ static int test_supported(struct bladerf **devp)
     struct bladerf *dev = *devp;
     const bladerf_channel rx1 = BLADERF_CHANNEL_RX(0);
     const bladerf_channel rx2 = BLADERF_CHANNEL_RX(1);
+    const bladerf_channel tx1 = BLADERF_CHANNEL_TX(0);
     const bladerf_channel tx2 = BLADERF_CHANNEL_TX(1);
 
-    /* AUTO at the OVERSAMPLE rates */
+    /* AUTO at the OVERSAMPLE rates: channel 1 while nothing is enabled */
     CHECK_STATUS(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
     CHECK_STATUS(bladerf_set_sample_rate(dev, rx1, RATE_OVERSAMPLE, NULL));
-    CHECK_STATUS(expect_mode(dev, "AUTO, OVERSAMPLE, 122.88 Msps", true));
+    CHECK_STATUS(expect_mode(dev, "AUTO, OVERSAMPLE, 122.88 Msps", true, 1, 1));
 
     CHECK_STATUS(bladerf_set_bandwidth(dev, rx1, 56000000, NULL));
-    CHECK_STATUS(expect_mode(dev, "after an RX bandwidth of 56 MHz", true));
+    CHECK_STATUS(expect_mode(dev, "after an RX bandwidth of 56 MHz", true, 1, 1));
 
     CHECK_STATUS(bladerf_set_frequency(dev, rx1, 2400000000));
-    CHECK_STATUS(expect_mode(dev, "after an RX frequency of 2.4 GHz", true));
+    CHECK_STATUS(expect_mode(dev, "after an RX frequency of 2.4 GHz", true, 1, 1));
 
     CHECK_STATUS(bladerf_set_gain_mode(dev, rx1, BLADERF_GAIN_MGC));
     CHECK_STATUS(bladerf_set_gain(dev, rx1, 20));
-    CHECK_STATUS(expect_mode(dev, "after an RX gain of 20 dB", true));
+    CHECK_STATUS(expect_mode(dev, "after an RX gain of 20 dB", true, 1, 1));
 
-    /* RX2 needs 2R2T mode */
+    /* AUTO, one channel of each direction, on either channel */
     CHECK_STATUS(check_counter(dev, rx2, "AUTO, RX2 streams the counter"));
-    CHECK_STATUS(expect_mode(dev, "after RX2 was enabled", false));
+    CHECK_STATUS(expect_mode(dev, "after RX2 was enabled", true, 2, 1));
 
     CHECK_STATUS(check_counter(dev, rx1, "AUTO, RX1 streams the counter"));
-    CHECK_STATUS(expect_mode(dev, "after RX1 was enabled again", true));
+    CHECK_STATUS(expect_mode(dev, "after RX1 was enabled", true, 1, 1));
 
-    /* ON */
+    CHECK_STATUS(expect_enabled(dev, tx2, "AUTO, TX2 on", true, 1, 2));
+    CHECK_STATUS(expect_enabled(dev, tx1, "AUTO, TX1 on", true, 1, 1));
+
+    CHECK_STATUS(bladerf_enable_module(dev, rx2, true));
+    CHECK_STATUS(expect_enabled(dev, tx1, "AUTO, RX2 and TX1 on", true, 2, 1));
+    CHECK_STATUS(expect_enabled(dev, tx2, "AUTO, RX2 and TX2 on", true, 2, 2));
+    CHECK_STATUS(bladerf_enable_module(dev, rx2, false));
+
+    /* AUTO, two channels of one direction: 2R2T mode */
+    CHECK_STATUS(bladerf_enable_module(dev, rx1, true));
+    CHECK_STATUS(expect_enabled(dev, rx2, "AUTO, RX1 and RX2 on", false, 1, 1));
+    CHECK_STATUS(bladerf_enable_module(dev, rx1, false));
+
+    CHECK_STATUS(check_counter(dev, rx1, "AUTO, RX1 streams the counter again"));
+    CHECK_STATUS(expect_mode(dev, "after RX1 was enabled again", true, 1, 1));
+
+    /* ON: either channel, one per direction */
     CHECK_STATUS(bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_ON));
-    CHECK_STATUS(expect_mode(dev, "ON", true));
+    CHECK_STATUS(expect_mode(dev, "ON", true, 1, 1));
 
-    expect_status("ON, enable RX2", bladerf_enable_module(dev, rx2, true),
+    CHECK_STATUS(bladerf_enable_module(dev, rx2, true));
+    CHECK_STATUS(expect_mode(dev, "ON, RX2 on", true, 2, 1));
+    expect_status("ON, enable RX1 while RX2 is on",
+                  bladerf_enable_module(dev, rx1, true),
                   BLADERF_ERR_UNSUPPORTED);
-    expect_status("ON, enable TX2", bladerf_enable_module(dev, tx2, true),
+    CHECK_STATUS(bladerf_enable_module(dev, rx2, false));
+
+    CHECK_STATUS(bladerf_enable_module(dev, tx2, true));
+    CHECK_STATUS(expect_mode(dev, "ON, TX2 on", true, 1, 2));
+    expect_status("ON, enable TX1 while TX2 is on",
+                  bladerf_enable_module(dev, tx1, true),
                   BLADERF_ERR_UNSUPPORTED);
+    CHECK_STATUS(bladerf_enable_module(dev, tx2, false));
 
     CHECK_STATUS(bladerf_sync_config(dev, BLADERF_RX_X2, BLADERF_FORMAT_SC8_Q7,
                                      256, 32768, 32, 1000));
@@ -197,27 +250,27 @@ static int test_supported(struct bladerf **devp)
                   BLADERF_ERR_UNSUPPORTED);
     CHECK_STATUS(bladerf_sync_config(dev, BLADERF_RX_X1, BLADERF_FORMAT_SC8_Q7,
                                      256, 32768, 32, 1000));
-    CHECK_STATUS(expect_mode(dev, "after the refused enables", true));
 
     /* OFF */
     CHECK_STATUS(bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_OFF));
-    CHECK_STATUS(expect_mode(dev, "OFF, OVERSAMPLE, 122.88 Msps", false));
+    CHECK_STATUS(expect_mode(dev, "OFF, OVERSAMPLE, 122.88 Msps", false, 1, 1));
 
     CHECK_STATUS(check_counter(dev, rx1, "OFF, RX1 streams the counter"));
-    CHECK_STATUS(expect_mode(dev, "after RX1 was enabled in OFF", false));
+    CHECK_STATUS(expect_mode(dev, "after RX1 was enabled in OFF", false, 1, 1));
 
     /* AUTO without OVERSAMPLE */
     CHECK_STATUS(bladerf_set_rfic_1r1t_mode(dev, BLADERF_RFIC_1R1T_AUTO));
-    CHECK_STATUS(expect_mode(dev, "AUTO again", true));
+    CHECK_STATUS(expect_mode(dev, "AUTO again", true, 1, 1));
 
     CHECK_STATUS(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, false));
     CHECK_STATUS(bladerf_set_sample_rate(dev, rx1, RATE_DEFAULT, NULL));
-    CHECK_STATUS(expect_mode(dev, "AUTO, no OVERSAMPLE, 61.44 Msps", false));
+    CHECK_STATUS(expect_mode(dev, "AUTO, no OVERSAMPLE, 61.44 Msps", false, 1, 1));
 
     /* A new session starts in AUTO and 2R2T mode */
     CHECK_STATUS(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
     CHECK_STATUS(bladerf_set_sample_rate(dev, rx1, RATE_OVERSAMPLE, NULL));
-    CHECK_STATUS(expect_mode(dev, "AUTO, OVERSAMPLE again, before a close", true));
+    CHECK_STATUS(bladerf_enable_module(dev, rx2, true));
+    CHECK_STATUS(expect_mode(dev, "AUTO, RX2 on, before a close", true, 2, 1));
 
     bladerf_close(dev);
     *devp = NULL;
@@ -225,7 +278,7 @@ static int test_supported(struct bladerf **devp)
     dev = *devp;
 
     expect_mode_selection(dev, "open again", BLADERF_RFIC_1R1T_AUTO);
-    CHECK_STATUS(expect_mode(dev, "open again", false));
+    CHECK_STATUS(expect_mode(dev, "open again", false, 1, 1));
 
 error:
     return status;
@@ -270,7 +323,7 @@ int main(int argc, char *argv[])
            supported ? "1R1T supported" : "no 1R1T support");
 
     expect_mode_selection(dev, "fresh open", BLADERF_RFIC_1R1T_AUTO);
-    CHECK_STATUS(expect_mode(dev, "fresh open", false));
+    CHECK_STATUS(expect_mode(dev, "fresh open", false, 1, 1));
 
     if (supported) {
         CHECK_STATUS(test_supported(&dev));
