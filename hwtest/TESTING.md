@@ -2165,6 +2165,65 @@ Not run: the FX3 endpoint-NAK firmware and ctrl_threads under it. The xA9 is
 behind the adapter's hub (USB 2-1.3), and the 11-19 flash procedure
 (`xa9-nak-master.sh`) writes the FX3 firmware only to a board on a root port.
 
+**Scheduled TX with 8-bit samples, and images with both fixes (phase 4, xA9,
+2026-11-22).** libbladeRF: `pr/sc8-meta-tx` f1e95d55 (off master; on the fork
+only as a local branch) makes `handle_tx_parameters()` and the burst-end reset
+in `streaming/sync.c` take SC8_Q7_META the way they take SC16_Q11_META. The
+async path does not read the flags at all: there the program writes the
+message headers itself. Test branch `fork-all-sc8` = fork-all + f1e95d55
+(local), host build `host-build-sc8`.
+
+With it, on R5-A9 (job `xa9p4a`, both channels), the SC8_Q7_META bursts were
+scheduled: every burst arrived, at a fixed delay. 2R2T (OFF, 61.44 and 30.72
+Msps, OVERSAMPLE) behaved like SC16 in 2R2T: delay 20, bursts after the first
+one sample early (spacing 614,399 then 614,400). 1R1T (AUTO 122.88 Msps, ON
+61.44 Msps) found each burst after the first 32,704 samples after the previous
+one: its first samples left at the end of the previous buffer. SC16 ON 61.44
+with the same build passed (delay 37, every spacing exactly P).
+
+Cause, from the fifo_reader model with 8-bit samples (4 per FIFO word, a FIFO
+read every fourth clock in 1R1T): the end of each message is found at the
+right read, so nothing drifts, but the read that takes a message's last word
+comes a clock before META_DOWNCOUNT counts it, and the sample FSM goes on with
+the next word while the meta FSM passes META_LOAD: a timed burst's first 3
+samples leave at the end of the previous buffer, and the rest 3 samples early.
+Ending the message one read earlier, as c7ac1500 does for 16-bit samples,
+makes every burst after the first late by one word per message (+61, +125,
++189 samples). The fix 7c43dc3b (1r1t): the meta FSM registers whether the
+next message follows without a gap (its timestamp is the current one plus a
+message of 8-bit samples, or "now"); if not, the sample FSM holds after that
+last read until meta_time_go has dropped or the meta FSM reads the next
+message's metadata. In the model every burst then leaves at its timestamp
+without a gap, and messages that follow on still go out back to back; 16-bit
+samples and 2R2T are unchanged (in 2R2T the model shows the first sample of
+each burst after the first leaving during META_LOAD, for both sample sizes:
+Nuand's design). Model update e641f302.
+
+Images with both fixes (job `p4fpga`; worst slack on the AD9361 RX LVDS capture
+path, as in every build): R6-A9 = hostedxA9 from 1r1t e641f302, Lite 23.1.1
+(setup -0.347 ns, hold +0.020 ns); N6-A9 = hostedxA9 from fork-all f2f8d5e1,
+Lite 25.1 (-0.284 ns, +0.062 ns); R6 = hostedxA5 from 1r1t (-0.563 ns, +0.008
+ns); N6 = hostedxA5 from fork-all (-0.116 ns, +0.075 ns). R6 and N6 are not
+run yet (the xA5 is on the MacBook Air). The xA9 runs (job `xa9p4b`, RX
+cabling, behind the hub, libbladeRF `host-build-sc8`, TX into the
+terminations with the TX cap):
+
+| Check | N6-A9 RX1 / TX1 | N6-A9 RX2 / TX2 | R6-A9 RX1 / TX1 | R6-A9 RX2 / TX2 |
+|---|---|---|---|---|
+| `test_1r1t_state` | 31 of 31 | | 31 of 31 | |
+| Counter 60 s, AUTO 122.88 | 122.879 Msps, no jump | 122.879 Msps, no jump | | |
+| BIST SC8 122.88, 60 s | 7.39e9 samples, 0 bad | 7.39e9 samples, 0 bad | 7.39e9 samples, 0 bad | |
+| AD9361 loopback 76.8, 92.16 | bit-exact | bit-exact | | |
+| Test 1, SC16_Q11_META, ON 61.44 | pass, delay 37, every spacing P | pass, delay 37 | pass, delay 37 | pass, delay 37 |
+| Test 1, SC8_Q7_META, AUTO 122.88 (1R1T) | pass, delay 38, every spacing P | pass, delay 37 | pass, delay 38 | pass, delay 38 |
+| Test 1, SC8_Q7_META, ON 61.44 (1R1T) | pass, delay 37 | pass, delay 37 | | |
+| Test 1, SC8_Q7_META, OFF 61.44 and 30.72 (2R2T references) | delay 20 (19 at 30.72), the bursts after the first one sample early | the same | | |
+
+So with `pr/sc8-meta-tx` and 7c43dc3b a scheduled TX at 122.88 Msps works
+in 1R1T mode on both channels: every burst bit-exact, exactly P apart, at one
+delay. The 2R2T references still fail the strict check by the one-sample
+effect described above (Nuand's design, both sample sizes).
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -2348,8 +2407,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 ### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps
 
 On the fork since 2026-11-22; not proposed upstream yet (section 21).
-Built and tested on the xA5 and the xA9 (R4, R4-A9, R5-A9) with Quartus Prime
-Lite 23.1.1 (Nios II), and with the Nios V port (N4-A9, Lite 25.1).
+Built and tested on the xA5 and the xA9 (R4, R4-A9, R5-A9, R6-A9) with Quartus
+Prime Lite 23.1.1 (Nios II), and with the Nios V port (N4-A9, N6-A9, Lite 25.1).
 
 - 10494cab hdl: the 1R1T frames in the AD9361 interface module, the R1
   bits exported from the core, the time tamers and the hosted top level.
@@ -2376,6 +2435,30 @@ Lite 23.1.1 (Nios II), and with the Nios V port (N4-A9, Lite 25.1).
   channel. Evidence: on R4, RX2 bit-exact at 122.88 Msps (BIST, counter),
   meta timestamps exact, the loopback TX2 to RX2 and the tone at +3 MHz as
   on channel 1.
+- 48eb1329, 4d8467b9, 7ac9f992 test: `test_1r1t_txsched`; b1f3f9f7 test:
+  `test_1r1t_stream -n`. Evidence: they pass on R6-A9 and N6-A9 (section 21).
+- c7ac1500 hdl: fifo_reader ends a 16-bit TX message one read earlier in
+  1R1T mode. Evidence: without it each timed burst after the first sent 29+
+  samples early (33 and 65 in the model); with it SC16 bursts are exact at
+  61.44 Msps on both channels (R5-A9, R6-A9, N6-A9).
+- 7c43dc3b hdl: fifo_reader holds 8-bit samples at a timed burst's start in
+  1R1T mode. Evidence: without it each SC8 burst after the first left its
+  first samples at the end of the previous buffer (R5-A9 with
+  `pr/sc8-meta-tx`; 3 samples in the model); with it SC8 bursts are exact
+  at 122.88 Msps (AUTO) and 61.44 Msps (ON) on both channels (R6-A9, N6-A9).
+- cf388a33, e641f302 hdl: the fifo_reader cycle model (16-bit, 8-bit, the
+  two fixes).
+
+### Branch `pr/sc8-meta-tx`: libbladeRF schedules SC8_Q7_META bursts
+
+Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
+(fork-all + this).
+
+- f1e95d55 libbladeRF: the sync TX path honors BURST_START, TX_NOW, the
+  timestamp, UPDATE_TIMESTAMP and BURST_END with SC8_Q7_META too. Evidence:
+  without it every SC8 burst left at once (all images); with it every burst
+  arrived at a fixed delay in 2R2T and, with 7c43dc3b, exactly on time in
+  1R1T at 122.88 Msps (section 21).
 
 ## Known noise and open items
 
@@ -2524,12 +2607,13 @@ Lite 23.1.1 (Nios II), and with the Nios V port (N4-A9, Lite 25.1).
     for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
     runs should avoid those minutes, or check losses there against the system
     log.
-18. Not yet covered in 1R1T mode (section 21): a scheduled TX at an
-    OVERSAMPLE rate (libbladeRF cannot schedule SC8_Q7_META bursts), the
-    fifo_reader fix c7ac1500 in a Nios V or xA5 image, the TX level across the
-    band (only FC + 3 MHz), RF recordings to disk at 122.88 Msps, the FX3 NAK
+18. Not yet covered in 1R1T mode (section 21): the xA5 with the fixed
+    images (R6, N6) and with every fork change, the TX level across the band
+    (only FC + 3 MHz), RF recordings to disk at 122.88 Msps, and the FX3 NAK
     firmware with every fork change and ctrl_threads under it (needs the xA9
-    on a root port), and the xA5 with every fork change.
+    on a root port). A scheduled TX at 122.88 Msps needs `pr/sc8-meta-tx`
+    (libbladeRF) and 7c43dc3b (FPGA); the one-sample effect at a timed
+    burst's start in 2R2T (both sample sizes) is Nuand's and not changed.
     The other revisions (wlan, adsb, foxhunt) build the same Qsys system but
     do not use 1R1T mode; only hostedxA5 and hostedxA9 were built. FPGA
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
