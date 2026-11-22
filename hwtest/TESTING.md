@@ -1885,8 +1885,8 @@ is one step wide.
   the two msb words of each sample, so each l_clk cycle holds 4'b0011,
   4'b0110, 4'b1100 or 4'b1001 and starts one sample) and transmit frames
   (4'b0011), selected by the AXI AD9361 core's R1 mode bits. The 2R2T cases
-  do not change. A cycle model decodes every sample at all 8 2R2T and 4
-  1R1T alignments.
+  do not change. A cycle model (`lib/models/r1-deframer-model.py`) decodes
+  every sample at all 8 2R2T and 4 1R1T alignments.
 - Qsys: the core exports its R1 bits; the time tamers count every clock in
   1R1T mode.
 - `bladerf-hosted.vhd`: in 1R1T mode the core's channel 0 valid passes
@@ -1900,6 +1900,8 @@ is one step wide.
   enabling RX2 or TX2 fails.
 - hwtest-stream: `-1` (1R1T mode), `-w` (analog bandwidth), `-X` (print
   the first received loopback samples).
+- `lib/r1-state.c` and `lib/r1-meta.c` need the branch's libbladeRF (built
+  by hand, not by `bin/build-host.sh`).
 
 Images (hostedxA5, Quartus Prime Lite 23.1.1, Nios II, worst setup slack in
 brackets; Nuand's design in the same build: -0.154 ns): R = 10494cab +
@@ -1919,7 +1921,7 @@ brackets; Nuand's design in the same build: -0.154 ns): R = 10494cab +
 | 1R1T counter at 122.88 for 600 s | R2: pass; R3: pass (7.37e10 samples, no jump) |
 | 1R1T in FPGA tuning mode (R2): BIST, counter, scheduled bursts at 122.88 | pass |
 | 1R1T loopback in the AD9361 (`-A`, R2, R3) | bit-exact at 30.72 (SC16), 61.44 and 76.8 (SC8); 2R2T fails at 76.8 on this board |
-| `bladerf_set_rfic_1r1t()` state (r1-state.c), host and FPGA tuning mode | as expected; RX2 refused in 1R1T mode (TX2: the no-TX guard refuses it first) |
+| `bladerf_set_rfic_1r1t()` state (`lib/r1-state.c`), host and FPGA tuning mode | as expected; RX2 refused in 1R1T mode (TX2: the no-TX guard refuses it first) |
 | Image A with this libbladeRF, 2R2T BIST SC16 and SC8 | pass (1R1T on image A gives no usable samples, as expected) |
 | FPGA digital loopback x2 SC16 at 30.72 | fails on R2 and on image A alike (x1 passes on both) |
 
@@ -1940,12 +1942,12 @@ Two problems came up in the first images and were fixed:
   strobe from the next state in 1R1T mode; 2R2T keeps the registered strobe.
 - **RX meta timestamps (R, R2).** Back-to-back bursts read "now" (rxsched
   -N, sc8meta, 122.88) failed in 1R1T in 3 of 3 runs, always the first
-  burst: an "overrun" after 4,088 samples, the first message. `r1-meta.c`
+  burst: an "overrun" after 4,088 samples, the first message. `lib/r1-meta.c`
   (the first 12 messages, the FPGA counter as the source) showed why: in
   1R1T the second SC8 message's timestamp was 4,089 samples after the first
   (then 4,088 each), and each SC16 message's at 61.44 Msps 2,046 after the
   previous (2,044 expected); the samples were continuous. A cycle model of
-  fifo_writer gives the same: at one sample per clock its meta FSM's steps
+  fifo_writer (`lib/models/r1-fifo-writer-model.py`) gives the same: at one sample per clock its meta FSM's steps
   through IDLE and META_WRITE let samples into the next buffer before the
   next meta. d66391ae counts each word when it is decided and writes the
   next meta in that cycle; on R3 the messages are 4,088 (SC8) and 2,044
@@ -1959,7 +1961,7 @@ scheduled bursts 3 of 4 in each mode. Every burst after the start was
 complete.
 
 **RF** (B200mini tone into RX1 through the splitter and 20 dB, RX gain 15
-dB, `r1-rf.py`). 1R1T at 122.88 and 2R2T at 122.88 with 0x006 = 0x70 gave
+dB, `bin/r1-rf.py`). 1R1T at 122.88 and 2R2T at 122.88 with 0x006 = 0x70 gave
 the same tone level (within 0.5 dB), image and noise floor at every offset;
 2R2T at 122.88 with Nuand's delay gave garbage (image within 2 dB of the
 tone). The analog filter sets the bandwidth, not the interface:
