@@ -94,10 +94,10 @@
  * -X N makes loopback print its first N received samples after the warm-up.
  * -1 puts the AD9361-FPGA interface in 1R1T mode once the sample rates are set
  * (bladerf_set_rfic_1r1t_mode ON, looked up at run time; one RX and one TX
- * channel, half the 2R2T interface clock; x1 on channel 1 only; needs an FPGA
- * with 1R1T support), -2 keeps it in 2R2T mode (mode OFF). Without either,
- * libbladeRF's default applies (AUTO in branch 1r1t: 1R1T mode with -O and
- * one channel on channel 1, on FPGA v0.17.0 or later).
+ * channel, on channel 1 or 2, half the 2R2T interface clock; x1 only; needs an
+ * FPGA with 1R1T support), -2 keeps it in 2R2T mode (mode OFF). Without
+ * either, libbladeRF's default applies (AUTO in branch 1r1t: 1R1T mode with -O
+ * and x1, on FPGA v0.17.0 or later).
  * -R ADDR=VAL sets an AD9361 register once the sample rate is set (libbladeRF
  * rewrites its oversample registers on each rate change), e.g. -R 0x006=0x50
  * for the RX DATA_CLK and data delays; -D prints the AD9361's clock, filter,
@@ -2198,7 +2198,7 @@ static void usage(void)
             "  -b BURST_MS  -L LEAD_MS | -N  -G GAP_MS  -S NBUF,SAMPLES,NXFER (rxsched)\n"
             "  -A (loopback in the AD9361)  -R ADDR=VAL (set an AD9361 register after\n"
             "  setup, up to 8)  -D (print AD9361 registers after setup)  -v (verbose)\n"
-            "  -1 (AD9361 interface in 1R1T mode: x1 on channel 1 only)  -2 (in 2R2T\n"
+            "  -1 (AD9361 interface in 1R1T mode: x1 only)  -2 (in 2R2T\n"
             "  mode)  -w BW (analog bandwidth)  -X N (loopback: print the first N\n"
             "  received samples)\n");
 }
@@ -2300,7 +2300,7 @@ int main(int argc, char **argv)
             default: usage(); return 2;
         }
     }
-    if (o.ch < 0 || o.ch > 1 || (o.r1t == 1 && (o.x2 || o.ch != 0))) {
+    if (o.ch < 0 || o.ch > 1 || (o.r1t == 1 && o.x2)) {
         usage();
         return 2;
     }

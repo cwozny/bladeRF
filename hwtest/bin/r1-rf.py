@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""r1-rf.py <hwtest-stream-r1> <out dir> [bw]: RF check of 1R1T mode on the xA5 RX1.
+"""r1-rf.py <hwtest-stream> <out dir> [bw|auto] [1|2]: RF check of 1R1T mode on the xA5.
 
 The B200mini sends a CW tone at FC + offset (its carrier F_B below that, a +F_B tone
-at baseband) into bladeRF RX1 through the splitter and 20 dB. For each offset,
-hwtest-stream-r1 rxcap captures RX1 at FC in each configuration of CONFIGS (a new
-bladeRF session each time, host tuning mode, the no-TX guard preloaded by the
-caller). Per capture: tone level (dBFS), frequency error, the bladeRF's I/Q image
+at baseband) into the bladeRF RX channel (1 or 2, default 1) through the splitter and
+20 dB. For each offset, hwtest-stream rxcap captures that channel at FC in each
+configuration of CONFIGS (a new bladeRF session each time, host tuning mode, the no-TX
+guard preloaded by the caller). "bw" selects CONFIGS_BW; "auto" selects CONFIGS_AUTO
+at +3 MHz only (libbladeRF's AUTO mode selection, branch 1r1t). Per capture: tone level (dBFS), frequency error, the bladeRF's I/Q image
 of the tone, the worst other spur and the median noise bin, both relative to the
 tone. The B200mini's own carrier leak and image (F_B and 2 F_B below the tone)
 are left out of the spur search."""
@@ -43,6 +44,13 @@ CONFIGS_BW = [
     ("1r1t-122.88-bw56", 122.88e6, "sc8", ["-O", "-1", "-w", "56M"]),
     ("1r1t-122.88", 122.88e6, "sc8", ["-O", "-1"]),
     ("2r2t-61.44-bw56", 61.44e6, "sc16", ["-w", "56M"]),
+]
+# AUTO (no -1/-2): 1R1T at 122.88 with OVERSAMPLE on FPGA v0.17.0 or later, and the 2R2T
+# reference without OVERSAMPLE
+CONFIGS_AUTO = [
+    ("auto-122.88", 122.88e6, "sc8", ["-O"]),
+    ("auto-122.88-bw56", 122.88e6, "sc8", ["-O", "-w", "56M"]),
+    ("2r2t-61.44", 61.44e6, "sc16", []),
 ]
 
 
@@ -83,12 +91,20 @@ def analyze(path, fmt, fs, f_exp):
 
 def main():
     hs, out = sys.argv[1:3]
-    configs = CONFIGS_BW if len(sys.argv) > 3 and sys.argv[3] == "bw" else CONFIGS
+    which = sys.argv[3] if len(sys.argv) > 3 else ""
+    ch = sys.argv[4] if len(sys.argv) > 4 else "1"
+    if ch not in ("1", "2"):
+        sys.exit("channel must be 1 or 2")
+    configs, offsets = CONFIGS, OFFSETS
+    if which == "bw":
+        configs = CONFIGS_BW
+    elif which == "auto":
+        configs, offsets = CONFIGS_AUTO, [3e6]
     os.makedirs(out, exist_ok=True)
     u = rf.usrp()
     proto = rf.tone(int(FS_B * 0.01), FS_B, F_B, 0.5).astype(np.complex64)
     results = open(os.path.join(out, "rf.jsonl"), "a")
-    for off in OFFSETS:
+    for off in offsets:
         stop, txr = threading.Event(), {}
 
         def tx():
@@ -103,11 +119,12 @@ def main():
             for name, rate, fmt, extra in configs:
                 if abs(off) > 0.45 * rate:
                     continue
-                path = os.path.join(out, "cap-%s-%+d.bin" % (name, int(off / 1e6)))
-                cmd = [hs, "rxcap", "-f", fmt, "-c", "1", "-r", str(int(rate)), "-n", str(N),
+                path = os.path.join(out, "cap-%s-rx%s-%+d.bin" % (name, ch, int(off / 1e6)))
+                cmd = [hs, "rxcap", "-f", fmt, "-c", ch, "-r", str(int(rate)), "-n", str(N),
                        "-F", str(int(FC)), "-g", str(GAIN), "-o", path] + extra
                 p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                rec = {"config": name, "offset_mhz": off / 1e6, "rc": p.returncode}
+                rec = {"config": name, "channel": int(ch), "offset_mhz": off / 1e6,
+                       "rc": p.returncode}
                 if p.returncode == 0 and os.path.exists(path):
                     rec.update(analyze(path, fmt, rate, off))
                     os.remove(path)
@@ -116,7 +133,7 @@ def main():
                 rec["b200_underflows"] = len(txr.get("underflows", []))
                 results.write(json.dumps(rec) + "\n")
                 results.flush()
-                print("RF %-16s %+6.1f MHz: %s" % (name, off / 1e6, json.dumps(
+                print("RF RX%s %-16s %+6.1f MHz: %s" % (ch, name, off / 1e6, json.dumps(
                     {k: rec.get(k) for k in ("rc", "tone_dbfs", "ferr_hz", "image_dbc",
                                               "spur_dbc", "spur_mhz", "floor_dbc_bin")})), flush=True)
         finally:
