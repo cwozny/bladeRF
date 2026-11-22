@@ -90,12 +90,14 @@
  * -O enables libbladeRF's AD9361 overclock feature (BLADERF_FEATURE_OVERSAMPLE,
  * up to 122.88 Msps, 8-bit formats only) before the sample rate is set.
  * -w BW sets the analog bandwidth of the channels used once the sample rates
- * are set (before -1 and -R).
+ * are set (before -1, -2 and -R).
  * -X N makes loopback print its first N received samples after the warm-up.
  * -1 puts the AD9361-FPGA interface in 1R1T mode once the sample rates are set
- * (bladerf_set_rfic_1r1t, looked up at run time; one RX and one TX channel,
- * half the 2R2T interface clock; x1 on channel 1 only; needs an FPGA with
- * 1R1T support).
+ * (bladerf_set_rfic_1r1t_mode ON, looked up at run time; one RX and one TX
+ * channel, half the 2R2T interface clock; x1 on channel 1 only; needs an FPGA
+ * with 1R1T support), -2 keeps it in 2R2T mode (mode OFF). Without either,
+ * libbladeRF's default applies (AUTO in branch 1r1t: 1R1T mode with -O and
+ * one channel on channel 1, on FPGA v0.17.0 or later).
  * -R ADDR=VAL sets an AD9361 register once the sample rate is set (libbladeRF
  * rewrites its oversample registers on each rate change), e.g. -R 0x006=0x50
  * for the RX DATA_CLK and data delays; -D prints the AD9361's clock, filter,
@@ -136,7 +138,7 @@ struct opts {
     uint16_t poke_addr[8];
     uint8_t poke_val[8];
     bool dump_rfic;                    /* -D: print AD9361 registers after setup */
-    bool r1;                           /* -1: AD9361 interface in 1R1T mode */
+    int r1t;                           /* -1: 1R1T mode ON, -2: OFF, 0: default */
     unsigned lb_dump;                  /* -X N: loopback prints its first N RX samples */
     double bw;                         /* -w: analog bandwidth (0: libbladeRF's) */
     int ch;                     /* 0 or 1 (x1 only) */
@@ -307,17 +309,26 @@ static int setup_channels(struct bladerf *dev, const struct opts *o, bool rx,
                    actual, o->bw);
         }
     }
-    /* -1: after the sample rates; looked up at run time, so this program
-     * still runs with a libbladeRF that does not have it */
-    if (o->r1) {
-        int (*set_1r1t)(struct bladerf *, bool) = NULL;
-        *(void **)&set_1r1t = dlsym(RTLD_DEFAULT, "bladerf_set_rfic_1r1t");
-        if (set_1r1t == NULL) {
-            fprintf(stderr, "ERROR: this libbladeRF has no bladerf_set_rfic_1r1t\n");
+    /* -1, -2: after the sample rates; looked up at run time, so this program
+     * still runs with a libbladeRF that does not have them */
+    if (o->r1t != 0) {
+        int (*set_mode)(struct bladerf *, int) = NULL;
+        *(void **)&set_mode = dlsym(RTLD_DEFAULT, "bladerf_set_rfic_1r1t_mode");
+        if (set_mode == NULL) {
+            fprintf(stderr, "ERROR: this libbladeRF has no bladerf_set_rfic_1r1t_mode\n");
             return 2;
         }
-        CHECK(set_1r1t(dev, true));
-        printf("AD9361 interface in 1R1T mode\n");
+        /* bladerf_rfic_1r1t_mode: AUTO 0, OFF 1, ON 2 */
+        CHECK(set_mode(dev, o->r1t == 1 ? 2 : 1));
+        printf("AD9361 interface mode selection %s\n", o->r1t == 1 ? "ON" : "OFF");
+    }
+    {
+        int (*get_1r1t)(struct bladerf *, bool *) = NULL;
+        bool on = false;
+        *(void **)&get_1r1t = dlsym(RTLD_DEFAULT, "bladerf_get_rfic_1r1t");
+        if (get_1r1t != NULL && get_1r1t(dev, &on) == 0) {
+            printf("AD9361 interface in %s mode after the setup\n", on ? "1R1T" : "2R2T");
+        }
     }
     /* -R: after the sample rate (libbladeRF rewrites its oversample registers
      * on every rate change), e.g. 0x006 (RX DATA_CLK and data delays) */
@@ -2187,8 +2198,9 @@ static void usage(void)
             "  -b BURST_MS  -L LEAD_MS | -N  -G GAP_MS  -S NBUF,SAMPLES,NXFER (rxsched)\n"
             "  -A (loopback in the AD9361)  -R ADDR=VAL (set an AD9361 register after\n"
             "  setup, up to 8)  -D (print AD9361 registers after setup)  -v (verbose)\n"
-            "  -1 (AD9361 interface in 1R1T mode: x1 on channel 1 only)  -w BW (analog\n"
-            "  bandwidth)  -X N (loopback: print the first N received samples)\n");
+            "  -1 (AD9361 interface in 1R1T mode: x1 on channel 1 only)  -2 (in 2R2T\n"
+            "  mode)  -w BW (analog bandwidth)  -X N (loopback: print the first N\n"
+            "  received samples)\n");
 }
 
 int main(int argc, char **argv)
@@ -2211,7 +2223,7 @@ int main(int argc, char **argv)
         o.sub = argv[2];
         optind = 3;
     }
-    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:AR:D1X:w:")) != -1) {
+    while ((c = getopt(argc, argv, "f:l:c:r:t:n:m:F:g:Oo:i:T:d:vW:B:b:L:G:NS:AR:D12X:w:")) != -1) {
         switch (c) {
             case 'f':
                 if (parse_format(optarg, &o.fmt) != 0) {
@@ -2247,7 +2259,8 @@ int main(int argc, char **argv)
             case 'N': o.rx_now = true; break;
             case 'A': o.lb_rfic = true; break;
             case 'D': o.dump_rfic = true; break;
-            case '1': o.r1 = true; break;
+            case '1': o.r1t = 1; break;
+            case '2': o.r1t = 2; break;
             case 'X': o.lb_dump = (unsigned)atoi(optarg); break;
             case 'w': o.bw = parse_num(optarg); break;
             case 'R': {
@@ -2287,7 +2300,7 @@ int main(int argc, char **argv)
             default: usage(); return 2;
         }
     }
-    if (o.ch < 0 || o.ch > 1 || (o.r1 && (o.x2 || o.ch != 0))) {
+    if (o.ch < 0 || o.ch > 1 || (o.r1t == 1 && (o.x2 || o.ch != 0))) {
         usage();
         return 2;
     }
