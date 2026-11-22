@@ -1210,7 +1210,12 @@ set and read back the same way; Nuand's `bladeRF_adsb` ran 30 s without an
 error (no messages: the RX ports are terminated). Nuand's published
 `fpga/v0.16.0/wlanxA9.rbf` (md5 fb1dc763…, the same as their .md5sum) is FPGA
 v0.15.3, which libbladeRF refuses with FX3 firmware 2.6.0 ("Firmware v2.6.0
-requires FPGA v0.16.0 or later").
+requires FPGA v0.16.0 or later"). Checked on 2026-11-21: it is byte for byte
+Nuand's `fpga/v0.15.3/wlanxA9.rbf` and `fpga/wlanxA9-latest.rbf` (md5
+fb1dc76308b64ffe5f2a4146e44c7b79, sha256 9f1fd747…), which the server dates
+2024-04-18 (v0.15.3) and 2025-05-11 (v0.16.0). Nuand publishes no wlan image
+for the xA4 or the xA5 (none for v0.14.0 to v0.16.0 or latest), and
+bladeRF-wiphy names only the xA9, so there is none to check on those boards.
 
 **Nuand's threads test on the xA9** (`results/ctrlthreads-nuand-xa9th-1119-0846`
 and `-1140`): `libbladeRF_test_ctrl -T fpga -t threads`, the full variant,
