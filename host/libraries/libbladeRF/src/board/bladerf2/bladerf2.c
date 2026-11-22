@@ -109,37 +109,48 @@ static struct bladerf_loopback_modes const bladerf2_loopback_modes[] = {
  * (RX1/TX1), and the AXI AD9361 core registers for 1R1T (R1) mode */
 #define AD936X_REG_TX_ENABLE_FILTER_CTRL 0x002
 #define AD936X_REG_RX_ENABLE_FILTER_CTRL 0x003
+#define AD936X_CHANNEL_1_ENABLE (1 << 6)
 #define AD936X_CHANNEL_2_ENABLE (1 << 7)
+#define AD936X_CHANNEL_ENABLES (AD936X_CHANNEL_1_ENABLE | AD936X_CHANNEL_2_ENABLE)
 #define AXI_AD9361_ADC_REG_CNTRL 0x0044
 #define AXI_AD9361_ADC_R1_MODE (1 << 2)
 #define AXI_AD9361_DAC_REG_CNTRL_2 0x4048
 #define AXI_AD9361_DAC_R1_MODE (1 << 5)
 #define AXI_AD9361_DAC_REG_RATECNTRL 0x404C
 
-/* Set the AD9361 digital interface to 1R1T or 2R2T mode. The AD9361 uses 1R1T
- * timing when only RX1 and TX1 are on, and its DATA_CLK is then half the 2R2T
- * clock. The AXI AD9361 core must decode the same framing, and its DAC rate is
- * the number of l_clk (DATA_CLK/2) cycles per sample, minus one. The caller
- * holds the device lock, if needed. */
-static int _bladerf2_apply_rfic_1r1t(struct bladerf *dev, bool enable)
+/* Set the AD9361 digital interface to 1R1T mode on RX channel rx and TX
+ * channel tx (0 or 1), or to 2R2T mode. The AD9361 uses 1R1T timing when only
+ * one RX and one TX channel are on, and its DATA_CLK is then half the 2R2T
+ * clock. The AXI AD9361 core must decode the same framing, and carries the
+ * samples of the channel that is on as its channel 0. Its DAC rate is the
+ * number of l_clk (DATA_CLK/2) cycles per sample, minus one. The caller holds
+ * the device lock, if needed. */
+static int _bladerf2_apply_rfic_1r1t(struct bladerf *dev,
+                                     bool enable,
+                                     size_t rx,
+                                     size_t tx)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     uint16_t const regs[] = { AD936X_REG_RX_ENABLE_FILTER_CTRL,
                               AD936X_REG_TX_ENABLE_FILTER_CTRL };
+    size_t const chs[]    = { rx, tx };
     uint32_t val;
     size_t i;
 
     for (i = 0; i < ARRAY_SIZE(regs); ++i) {
         uint64_t data;
+        uint64_t enables = AD936X_CHANNEL_ENABLES;
+
+        if (enable) {
+            enables = (chs[i] == 0) ? AD936X_CHANNEL_1_ENABLE
+                                    : AD936X_CHANNEL_2_ENABLE;
+        }
 
         CHECK_STATUS(dev->backend->ad9361_spi_read(
             dev, regs[i] | AD936X_READ | AD936X_CNT(1), &data));
 
-        if (enable) {
-            data &= ~((uint64_t)AD936X_CHANNEL_2_ENABLE << 56);
-        } else {
-            data |= ((uint64_t)AD936X_CHANNEL_2_ENABLE << 56);
-        }
+        data &= ~((uint64_t)AD936X_CHANNEL_ENABLES << 56);
+        data |= enables << 56;
 
         CHECK_STATUS(dev->backend->ad9361_spi_write(
             dev, regs[i] | AD936X_WRITE | AD936X_CNT(1), data));
@@ -169,78 +180,103 @@ static int _bladerf2_apply_rfic_1r1t(struct bladerf *dev, bool enable)
     return 0;
 }
 
-/* Decide whether the RFIC digital interface should be in 1R1T mode, before
- * channel ch is enabled, or after another change if ch is
- * BLADERF_CHANNEL_INVALID. 1R1T mode carries only RX1 and TX1, so RX2, TX2 and
- * two-channel layouts need 2R2T mode. The caller holds the device lock, if
- * needed. */
+/* Decide whether the RFIC digital interface should be in 1R1T mode, and on
+ * which RX and TX channel (rx, tx: 0 or 1), before channel ch is enabled, or
+ * after another change if ch is BLADERF_CHANNEL_INVALID. 1R1T mode carries one
+ * RX and one TX channel, on either channel; two channels of one direction, or
+ * a two-channel layout, need 2R2T mode. With no channel of a direction
+ * enabled, channel 1 is used. The caller holds the device lock, if needed. */
 static int _bladerf2_want_rfic_1r1t(struct bladerf *dev,
                                     bladerf_channel ch,
-                                    bool *want)
+                                    bool *want,
+                                    size_t *rx,
+                                    size_t *tx)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
-    bool two_channels = false;
+    bool rx_on[2], tx_on[2];
+    bool two_channels;
     uint32_t reg;
-
-    if (ch != BLADERF_CHANNEL_INVALID) {
-        bladerf_direction dir =
-            BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_TX : BLADERF_RX;
-        bladerf_channel_layout layout =
-            board_data->sync[dir].stream_config.layout;
-
-        two_channels = (ch != BLADERF_CHANNEL_RX(0) &&
-                        ch != BLADERF_CHANNEL_TX(0)) ||
-                       layout == BLADERF_RX_X2 || layout == BLADERF_TX_X2;
-    }
+    size_t i;
 
     *want = false;
+    *rx   = 0;
+    *tx   = 0;
 
     switch (board_data->rfic_1r1t_mode) {
         case BLADERF_RFIC_1R1T_ON:
-            if (two_channels) {
-                log_error("%s: only RX1 and TX1 can stream in 1R1T mode\n",
-                          __FUNCTION__);
-                return BLADERF_ERR_UNSUPPORTED;
-            }
-
-            *want = true;
-            return 0;
+            break;
 
         case BLADERF_RFIC_1R1T_AUTO:
+            /* 1R1T mode only where it is needed, at the OVERSAMPLE rates */
+            if (dev->feature != BLADERF_FEATURE_OVERSAMPLE ||
+                !have_cap(board_data->capabilities,
+                          BLADERF_CAP_FPGA_RFIC_1R1T)) {
+                return 0;
+            }
             break;
 
         default:
             return 0;
     }
 
-    /* AUTO: 1R1T mode only where it is needed, at the OVERSAMPLE rates */
-    if (two_channels || dev->feature != BLADERF_FEATURE_OVERSAMPLE ||
-        !have_cap(board_data->capabilities, BLADERF_CAP_FPGA_RFIC_1R1T)) {
+    CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
+
+    for (i = 0; i < 2; ++i) {
+        rx_on[i] = _rffe_ch_enabled(reg, BLADERF_CHANNEL_RX(i));
+        tx_on[i] = _rffe_ch_enabled(reg, BLADERF_CHANNEL_TX(i));
+    }
+
+    if (ch != BLADERF_CHANNEL_INVALID) {
+        bladerf_direction dir =
+            BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_TX : BLADERF_RX;
+        bladerf_channel_layout layout =
+            board_data->sync[dir].stream_config.layout;
+        bool *on = (dir == BLADERF_TX) ? tx_on : rx_on;
+
+        /* BLADERF_CHANNEL_RX(n) and BLADERF_CHANNEL_TX(n) are (n << 1) | dir */
+        on[(size_t)ch >> 1] = true;
+
+        if (layout == BLADERF_RX_X2 || layout == BLADERF_TX_X2) {
+            on[0] = true;
+            on[1] = true;
+        }
+    }
+
+    two_channels = (rx_on[0] && rx_on[1]) || (tx_on[0] && tx_on[1]);
+
+    if (two_channels) {
+        if (board_data->rfic_1r1t_mode == BLADERF_RFIC_1R1T_ON) {
+            log_error("%s: only one RX and one TX channel can stream in 1R1T "
+                      "mode\n",
+                      __FUNCTION__);
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+
         return 0;
     }
 
-    CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
-
-    *want = !_rffe_ch_enabled(reg, BLADERF_CHANNEL_RX(1)) &&
-            !_rffe_ch_enabled(reg, BLADERF_CHANNEL_TX(1));
+    *want = true;
+    *rx   = (rx_on[1] && !rx_on[0]) ? 1 : 0;
+    *tx   = (tx_on[1] && !tx_on[0]) ? 1 : 0;
 
     return 0;
 }
 
 /* Put the RFIC digital interface in the mode that _bladerf2_want_rfic_1r1t()
- * selects. Other RFIC changes can enable RX2 and TX2 in the RFIC again, so
+ * selects. Other RFIC changes can enable both channels in the RFIC again, so
  * 1R1T mode is set again each time it is wanted. When 2R2T mode is wanted and
  * already on, nothing is written. The caller holds the device lock, if
  * needed. */
 static int _bladerf2_update_rfic_1r1t(struct bladerf *dev, bladerf_channel ch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
+    size_t rx, tx;
     bool want;
 
-    CHECK_STATUS(_bladerf2_want_rfic_1r1t(dev, ch, &want));
+    CHECK_STATUS(_bladerf2_want_rfic_1r1t(dev, ch, &want, &rx, &tx));
 
     if (want || board_data->rfic_1r1t) {
-        CHECK_STATUS(_bladerf2_apply_rfic_1r1t(dev, want));
+        CHECK_STATUS(_bladerf2_apply_rfic_1r1t(dev, want, rx, tx));
     }
 
     return 0;
@@ -343,7 +379,7 @@ static int _bladerf2_initialize(struct bladerf *dev)
     board_data->rfic_1r1t      = false;
 
     if (have_cap(board_data->capabilities, BLADERF_CAP_FPGA_RFIC_1R1T)) {
-        CHECK_STATUS(_bladerf2_apply_rfic_1r1t(dev, false));
+        CHECK_STATUS(_bladerf2_apply_rfic_1r1t(dev, false, 0, 0));
     }
 
     /* Update device state */
@@ -3420,28 +3456,24 @@ static int _bladerf2_set_rfic_1r1t_mode(struct bladerf *dev,
                                        bladerf_rfic_1r1t_mode mode)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
-    uint32_t reg;
+    bladerf_rfic_1r1t_mode old_mode        = board_data->rfic_1r1t_mode;
+    int status;
 
-    if (mode == BLADERF_RFIC_1R1T_ON) {
-        if (!have_cap(board_data->capabilities, BLADERF_CAP_FPGA_RFIC_1R1T)) {
-            log_error("%s: this FPGA image has no 1R1T support\n",
-                      __FUNCTION__);
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-
-        CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
-
-        if (_rffe_ch_enabled(reg, BLADERF_CHANNEL_RX(1)) ||
-            _rffe_ch_enabled(reg, BLADERF_CHANNEL_TX(1))) {
-            log_error("%s: only RX1 and TX1 can stream in 1R1T mode\n",
-                      __FUNCTION__);
-            return BLADERF_ERR_UNSUPPORTED;
-        }
+    if (mode == BLADERF_RFIC_1R1T_ON &&
+        !have_cap(board_data->capabilities, BLADERF_CAP_FPGA_RFIC_1R1T)) {
+        log_error("%s: this FPGA image has no 1R1T support\n", __FUNCTION__);
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     board_data->rfic_1r1t_mode = mode;
 
-    return _bladerf2_update_rfic_1r1t(dev, BLADERF_CHANNEL_INVALID);
+    /* ON is refused while two channels of one direction are enabled */
+    status = _bladerf2_update_rfic_1r1t(dev, BLADERF_CHANNEL_INVALID);
+    if (status != 0) {
+        board_data->rfic_1r1t_mode = old_mode;
+    }
+
+    return status;
 }
 
 int bladerf_set_rfic_1r1t_mode(struct bladerf *dev,
