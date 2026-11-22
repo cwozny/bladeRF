@@ -1851,6 +1851,131 @@ trace analyzed with `bin/nios-trace-analyze.py`:
   run passed: a failure needs the Nios to finish in the ~0.2 ms between a
   time-out and the next poll (README.md).
 
+### 21. 1R1T mode: one channel at 122.88 Msps on the xA5 (2026-11-21/22)
+
+The OVERSAMPLE feature keeps both AD9361 receive channels on (register
+0x003 = 0xD4), so the AD9361-FPGA interface runs in 2R2T mode, with DATA_CLK
+at 4 x the sample rate: 491.52 MHz at 122.88 Msps. With only RX1 and TX1 on
+(0x003 = 0x54, 0x002 = 0x40) the AD9361 uses 1R1T timing, and DATA_CLK is
+2 x the sample rate: 245.76 MHz, the clock of 2R2T at 61.44 Msps (section
+17 measured the halving on the xA9; the xA5 halves too). Nuand's interface
+module decodes only 2R2T frames, so 1R1T needs an FPGA change.
+
+**The starting point: 2R2T at 122.88 Msps on the xA5** (job `xa5delay`,
+results `results/xa5delay-20261121-225647/`). The AD9361's PRBS (BIST, SC8,
+OVERSAMPLE) for each RX delay setting (register 0x006, 1 s each), image A
+('.' clean, 'x' bad samples, '-' no lock):
+
+| Rate | Channel | DATA_CLK delay 0..15 | data delay 1..15 |
+|---|---|---|---|
+| 76.8 | RX1 | `-x....--x....--x` | `-....x--....x--` |
+| 76.8 | RX2 | `-x...x--x...x--x` | `-....x--x...x--` |
+| 122.88 | RX1 | `x--.x--.x--x.--x` | `.x--.x--x.---xx` |
+| 122.88 | RX2 | `x--.x--.x--x.--x` | `.x--xx--x.---.x` |
+
+At 122.88 Msps four settings were clean on both channels: 0x30 and 0x70
+(DATA_CLK delay 3 and 7), 0x01 and 0x0a (data delay 1 and 10), each also
+for 30 s per channel (3.69e9 samples, 0 bad). Nuand's default (0x50, DATA_CLK
+delay 5) does not lock. Image C gave the same windows. Each clean window
+is one step wide.
+
+**The change** (branch `1r1t` on master 35174c30, local only):
+
+- `axi_ad9361_dev_if_alt.v`: the 1R1T receive frames (the frame is high for
+  the two msb words of each sample, so each l_clk cycle holds 4'b0011,
+  4'b0110, 4'b1100 or 4'b1001 and starts one sample) and transmit frames
+  (4'b0011), selected by the AXI AD9361 core's R1 mode bits. The 2R2T cases
+  do not change. A cycle model decodes every sample at all 8 2R2T and 4
+  1R1T alignments.
+- Qsys: the core exports its R1 bits; the time tamers count every clock in
+  1R1T mode.
+- `bladerf-hosted.vhd`: in 1R1T mode the core's channel 0 valid passes
+  without the rising-edge filter, channel 1 is dropped, and the RX counter
+  runs at one sample per clock.
+- `fifo_reader.vhd` and `fifo_writer.vhd`: one sample per clock (below).
+- libbladeRF: `bladerf_set_rfic_1r1t()` and `bladerf_get_rfic_1r1t()` in
+  bladeRF2.h turn RX2 and TX2 off in the AD9361, and set the core's R1 bits
+  and a DAC rate of one sample per clock. The mode is set again after each
+  sample rate change, and it is off after every open. While it is on,
+  enabling RX2 or TX2 fails.
+- hwtest-stream: `-1` (1R1T mode), `-w` (analog bandwidth), `-X` (print
+  the first received loopback samples).
+
+Images (hostedxA5, Quartus Prime Lite 23.1.1, Nios II, worst setup slack in
+brackets; Nuand's design in the same build: -0.154 ns): R = 10494cab +
+7d7480fa (-0.165 ns), R2 = R + aeb7039e (-0.066 ns), R3 = R2 + d66391ae
+(-0.188 ns). Receive only and host tuning mode unless noted; TX runs with
+`HWTEST_TX=1` (TX cap) into 50 ohm loads. Jobs `xa5r1`, `xa5r1b`, `r1chain`,
+`xa5r1start`, `xa5r1soak`.
+
+| Check | Result |
+|---|---|
+| 2R2T on R, R2, R3: BIST SC16 at 61.44 on RX1 and RX2; SC8 at 61.44 (R); counter at 122.88 (R) | pass |
+| 1R1T counter at 30.72, 61.44, 122.88 (SC8) and 61.44 (SC16), 10 s each | pass: every sample, 122.879 Msps |
+| 1R1T BIST SC16 at 30.72 and 61.44 (all 12 bits) | 0 bad |
+| 1R1T BIST SC8 at 30.72, 61.44, 76.8, 92.16, 100, 112 and 122.88, 10 s each, against a golden period learnt in 1R1T | 0 bad |
+| 1R1T 0x006 map at 122.88, RX1 | DATA_CLK delay 1-6 and 10-14, data delay 3-8 and 12-15 clean (`x......--x.....x`, `--......---....`) |
+| 1R1T BIST SC8 at 122.88, long | R: 300 s, 3.69e10 samples, 0 bad; R2: see below; R3: 1800 s, 2.21e11 samples, 0 bad |
+| 1R1T counter at 122.88 for 600 s | R2: pass; R3: pass (7.37e10 samples, no jump) |
+| 1R1T in FPGA tuning mode (R2): BIST, counter, scheduled bursts at 122.88 | pass |
+| 1R1T loopback in the AD9361 (`-A`, R2, R3) | bit-exact at 30.72 (SC16), 61.44 and 76.8 (SC8); 2R2T fails at 76.8 on this board |
+| `bladerf_set_rfic_1r1t()` state (r1-state.c), host and FPGA tuning mode | as expected; RX2 refused in 1R1T mode (TX2: the no-TX guard refuses it first) |
+| Image A with this libbladeRF, 2R2T BIST SC16 and SC8 | pass (1R1T on image A gives no usable samples, as expected) |
+| FPGA digital loopback x2 SC16 at 30.72 | fails on R2 and on image A alike (x1 passes on both) |
+
+The R2 1800 s soak lost samples once: at 121 s, for 0.4 ms (145 phase
+losses, 37,120 bad samples, bit errors spread evenly over all 16 bits), in
+the second the XPS's package cache refresh started (`mint-refresh-cache`,
+every 2 h at :11:52 and :12:52); the other 1,680 s (2.06e11 samples) were
+clean. A host stall, not the interface (open item 17).
+
+Two problems came up in the first images and were fixed:
+
+- **TX samples in swapped pairs (R).** The loopback in the AD9361 never
+  locked in 1R1T. Its first received samples (`-X`) were pairs swapped:
+  ..., 0x79, 0x78, 0x7b, 0x7a, ... With one channel a TX FIFO word holds two
+  samples, and fifo_reader's registered read strobe advanced the FIFO one
+  clock after the request that took the word's last sample; at one request
+  per clock the next request read the old word again. aeb7039e takes the
+  strobe from the next state in 1R1T mode; 2R2T keeps the registered strobe.
+- **RX meta timestamps (R, R2).** Back-to-back bursts read "now" (rxsched
+  -N, sc8meta, 122.88) failed in 1R1T in 3 of 3 runs, always the first
+  burst: an "overrun" after 4,088 samples, the first message. `r1-meta.c`
+  (the first 12 messages, the FPGA counter as the source) showed why: in
+  1R1T the second SC8 message's timestamp was 4,089 samples after the first
+  (then 4,088 each), and each SC16 message's at 61.44 Msps 2,046 after the
+  previous (2,044 expected); the samples were continuous. A cycle model of
+  fifo_writer gives the same: at one sample per clock its meta FSM's steps
+  through IDLE and META_WRITE let samples into the next buffer before the
+  next meta. d66391ae counts each word when it is decided and writes the
+  next meta in that cycle; on R3 the messages are 4,088 (SC8) and 2,044
+  (SC16) samples apart in 1R1T, as in 2R2T.
+
+With exact timestamps, back-to-back bursts on R3 still overran at the
+start of some streams: bursts 1 to 3, then none. That is open item 6
+([#1139]), and it is the same in both modes (`xa5r1start`, 3 s runs at
+122.88 sc8meta): 1R1T 4 of 8 runs clean, 2R2T 4 of 8, image A 3 of 6;
+scheduled bursts 3 of 4 in each mode. Every burst after the start was
+complete.
+
+**RF** (B200mini tone into RX1 through the splitter and 20 dB, RX gain 15
+dB, `r1-rf.py`). 1R1T at 122.88 and 2R2T at 122.88 with 0x006 = 0x70 gave
+the same tone level (within 0.5 dB), image and noise floor at every offset;
+2R2T at 122.88 with Nuand's delay gave garbage (image within 2 dB of the
+tone). The analog filter sets the bandwidth, not the interface:
+
+| Tone offset (MHz) | +3 | +-10 | +-25 | +-40 | +-55 |
+|---|---|---|---|---|---|
+| 1R1T 122.88, default bandwidth (18 MHz), dBFS | -34.6 | -37.2 | -60.3 to -60.9 | not seen | not seen |
+| 1R1T 122.88, bandwidth 56 MHz (`-w`), dBFS | -34.4 | -34.5 | -36.1 to -36.4 | -44.0 to -44.4 | -58.6 to -59.9 |
+| the same, I/Q image (dBc) | -39 | -39 | -37 to -38 | -18 | -13 to -14 |
+| 2R2T 61.44 (no OVERSAMPLE), bandwidth 56 MHz, I/Q image (dBc) | -64 | -63 | -30 to -31 | | |
+
+libbladeRF keeps the RX filter at its 18 MHz default unless the bandwidth
+is set after the sample rate (with OVERSAMPLE it warns that the result is
+unknown). The image rejection with OVERSAMPLE, about -38 dBc near the
+center, is the overclock's: the same in 1R1T and 2R2T.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -2031,6 +2156,27 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   the ADS-B loopback's frames alike, every message exact, both losing about
   1 frame in 10,000 (open item 14).
 
+### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps (local)
+
+Not on the fork and not proposed upstream yet (section 21). Built and tested
+on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II).
+
+- 10494cab hdl: the 1R1T frames in the AD9361 interface module, the R1
+  bits exported from the core, the time tamers and the hosted top level.
+  Evidence: in 1R1T mode BIST bit-exact from 30.72 to 122.88 Msps, the
+  FPGA counter complete at 122.879 Msps, a delay window of 6 steps at
+  122.88 Msps (2R2T: 1 step), scheduled bursts on time; in 2R2T the same
+  results as before.
+- 7d7480fa libbladeRF: `bladerf_set_rfic_1r1t()`. Evidence: r1-state.c,
+  both tuning modes.
+- aeb7039e hdl: fifo_reader reads ahead in 1R1T mode. Evidence: the
+  loopback in the AD9361 swapped sample pairs without it and is bit-exact
+  with it.
+- d66391ae hdl: exact RX meta boundaries in 1R1T mode. Evidence: r1-meta.c
+  message timestamps 4,089/2,046 apart without it, 4,088/2,044 with it.
+- d15ec490 libbladeRF: RX2 and TX2 refused in 1R1T mode. Evidence:
+  r1-state.c (RX2; TX2 is refused by the harness's no-TX guard first).
+
 ## Known noise and open items
 
 1. `rx_meta` with two channels overruns about once in 20 runs, with either
@@ -2173,6 +2319,16 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     the four traced low runs the requests, their values and the Nios's
     replies were the same as in normal runs. Cause not found; whether it
     is in the bladeRF or in the B200mini is not known.
+17. The XPS 13 refreshes its package cache every 2 hours (`mint-refresh-cache`
+    at :11:52 and again at :12:52). Once that stalled a 122.88 Msps SC8 stream
+    for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
+    runs should avoid those minutes, or check losses there against the system
+    log.
+18. Not yet covered in 1R1T mode (section 21): timestamped (scheduled)
+    transmit, SC16_Q11_PACKED, RF recordings to disk at 122.88 Msps, the
+    `niosv` branch, the xA4 and the xA9. The other revisions (wlan, adsb,
+    foxhunt) build the same Qsys system but do not use 1R1T mode; only
+    hostedxA5 was built.
 
 ## How to repeat
 
