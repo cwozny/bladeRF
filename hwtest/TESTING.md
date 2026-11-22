@@ -654,7 +654,7 @@ adsb) and fe4bb32d (foxhunt), with Nuand's code (master 35174c30) built with
   ns) is reset by `wlan_rx`'s `rst_rr(0)`, a reset synchronized to the
   80 MHz clock and used as the asynchronous reset of 40 MHz (sample clock)
   logic (upstream draft 13; `recovery-groups.tcl`).
-- **adsb** has not built since 2025.05 (upstream draft 12): it needs
+- **adsb** has not built since 2025.05 (upstream issue [#1117]): it needs
   Nuand/bladeRF-adsb in `hdl/fpga/ip/nuand/adsb` and two one-line fixes
   (branch `adsb-fix`), applied to the working trees for these builds.
   The setup misses are in the ADS-B decoder, filters and preamble detector
@@ -1236,16 +1236,16 @@ the row says otherwise:
 
 | Fix | Check | master | the fix alone |
 |---|---|---|---|
-| P1 stale Nios replies | late-reply injector, `test_ctrl -T fpga -t bandwidth` | 19 failures | 0 |
-| P1 | full bandwidth sweep, FPGA tuning mode | 0 failures | 0 (A and C) |
-| P2 two-channel enable, FPGA tuning mode | `test_rx_meta -m`, `-b 8 -m`, both modes, A and C | not run (open item 10's trigger) | pass; one start-of-stream overrun (below) |
-| P3 MIMO layout, host tuning mode | RX1+RX2 receive while TX1 sends 0.2 s | 2,228,224 of 30,000,000 samples | 30,000,000; `test_rx_meta -m`, `-b 8 -m` pass |
-| P4 RFIC re-init after a load | `test_fpga_load`, host tuning mode | "Calibration TIMEOUT (0x16, 0x80)" | pass (A and C); FPGA mode passes before and after |
-| P7a gain-range lock | `test_ctrl -t gain -f`, both modes | pass | pass |
-| P7b gain sign | gain readback check, FPGA tuning mode | 5 of 14 wrong (-2147483648) | 0 of 14 (A and C; host mode 0 before and after) |
-| P7d gain check range | `test_ctrl -t gain -f`, both modes | pass | pass |
-| P16 flash page count | `flash_backup` of all 16 MiB in one call | stops: "usb.c:612: usb_read_flash_pages: Assertion `count == count_u32' failed" | identical to the two 8 MiB halves read with master (md5 9cc8724e…) |
-| P18 flash read error | `flash_backup` of the low 8 MiB | - | identical to master's |
+| [#1122] stale Nios replies | late-reply injector, `test_ctrl -T fpga -t bandwidth` | 19 failures | 0 |
+| [#1122] | full bandwidth sweep, FPGA tuning mode | 0 failures | 0 (A and C) |
+| [#1123] two-channel enable, FPGA tuning mode | `test_rx_meta -m`, `-b 8 -m`, both modes, A and C | not run (open item 10's trigger) | pass; one start-of-stream overrun (below) |
+| [#1124] MIMO layout, host tuning mode | RX1+RX2 receive while TX1 sends 0.2 s | 2,228,224 of 30,000,000 samples | 30,000,000; `test_rx_meta -m`, `-b 8 -m` pass |
+| [#1125] RFIC re-init after a load | `test_fpga_load`, host tuning mode | "Calibration TIMEOUT (0x16, 0x80)" | pass (A and C); FPGA mode passes before and after |
+| [#1128] gain-range lock | `test_ctrl -t gain -f`, both modes | pass | pass |
+| [#1129] gain sign | gain readback check, FPGA tuning mode | 5 of 14 wrong (-2147483648) | 0 of 14 (A and C; host mode 0 before and after) |
+| [#1131] gain check range | `test_ctrl -t gain -f`, both modes | pass | pass |
+| [#1134] flash page count | `flash_backup` of all 16 MiB in one call | stops: "usb.c:612: usb_read_flash_pages: Assertion `count == count_u32' failed" | identical to the two 8 MiB halves read with master (md5 9cc8724e…) |
+| [#1135] flash read error | `flash_backup` of the low 8 MiB | - | identical to master's |
 
 `test_scheduled_retune` (rx, Nuand's hop list, quick tune; every failure
 "Requested timestamp is in the past"), runs failed:
@@ -1253,21 +1253,21 @@ the row says otherwise:
 | Build | host tuning mode | FPGA tuning mode |
 |---|---|---|
 | master | 10 of 10 (iteration 1) | 10 of 10 (iteration 1) |
-| P5a (tune first) | 26 of 30 (15 at iteration 3) | 24 of 30 (iterations 114-150) |
-| P5b (64 buffers) | 10 of 10 (iterations 1-4) | 0 of 10 |
-| P5a + P5b | 0 of 30 | 0 of 30 |
+| [#1126] (tune first) | 26 of 30 (15 at iteration 3) | 24 of 30 (iterations 114-150) |
+| [#1127] (64 buffers) | 10 of 10 (iterations 1-4) | 0 of 10 |
+| [#1126] + [#1127] | 0 of 30 | 0 of 30 |
 
-P7c (test only) had no run of its own: alone it cannot pass the threads test,
-and the threads runs above include it.
+[#1130] (test only) had no run of its own: alone it cannot pass the threads
+test, and the threads runs above include it.
 
-The P2 overrun: both FPGA-mode `-m` runs of the split check (A, then C)
+The [#1123] overrun: both FPGA-mode `-m` runs of the split check (A, then C)
 reported one "Overrun detected" after 9 of 15 reads, at the same sample
 (4,016 valid samples, then a jump to t = 0x10f7b); the stream went on and
-the test completed. Then, each right after a load of A: P2 alone 12 runs,
-the all-fixes build 12 runs (alternating order): no overrun
+the test completed. Then, each right after a load of A: [#1123] alone 12
+runs, the all-fixes build 12 runs (alternating order): no overrun
 (`results/recheck-*`, `recheck2-*`). The all-fixes build also had none in the
-5 campaign runs on the xA9. So 2 of 14 with P2 alone, 0 of 17 with all fixes:
-open item 1's overrun, not a stop of the stream (I2's failure).
+5 campaign runs on the xA9. So 2 of 14 with [#1123] alone, 0 of 17 with all
+fixes: open item 1's overrun, not a stop of the stream ([#1109]'s failure).
 
 **A libbladeRF bug found on the way: a timed-out wait reads as an
 "unexpected error"** (`results/recheck2-*`). `posix_cond_timedwait()` in
@@ -1369,7 +1369,7 @@ exactly as the image above, but with that one line as it was before
 | loop mode | 0 back (expected) | 0 back (expected) |
 
 So since 950189d2 the wlan revision sends only the first frame after an
-FPGA load as the host asked (upstream draft I20). The second stock run got
+FPGA load as the host asked (upstream issue [#1121]). The second stock run got
 no report at all: the stale dwords left in the TX FIFO by the first run
 misalign even its first frame, as `wiphy-loop.md` predicted. The demodulator
 is not tested: the stock design blanks its receiver while it transmits.
@@ -1745,7 +1745,7 @@ records, 40 pass, but image A had four low runs at 5.8 GHz (2.6 to
   (20 Msps and 20 MHz after 10), and in every such run one of the two
   commands (in two runs both) kept the Nios busy for 360 to 385 ms:
   libbladeRF's status read timed out after 250 ms (the condition of
-  upstream draft I1), 22 times in 20 runs. No reply was taken for another
+  upstream issue [#1108]), 22 times in 20 runs. No reply was taken for another
   request, and those runs' levels were normal.
 
 Open item 16 has older records that show the same.
@@ -1791,18 +1791,18 @@ pass. Board and paths as for the xA9 above:
 
 ### 20. A failed flash page read; the bandwidth sweep in host tuning mode (2026-11-21)
 
-Two checks that the issue texts needed (I18 came from reading the code only;
-I1 named no workaround). The xA5 with the official image (A) loaded first,
-receive-only (the no-TX guard preloaded), job `xa5v4v12`, results
-`results/xa5v4v12-20261121-153432/`.
+Two checks that the issue texts needed (the draft of [#1120] came from
+reading the code only; the draft of [#1108] named no workaround). The xA5
+with the official image (A) loaded first, receive-only (the no-TX guard
+preloaded), job `xa5v4v12`, results `results/xa5v4v12-20261121-153432/`.
 
-**A failed flash page read (I18, P18).** `lib/flash-read-fail.c` makes the
-first read of page 100 fail in one of three ways: the firmware's status
+**A failed flash page read ([#1120], [#1135]).** `lib/flash-read-fail.c` makes
+the first read of page 100 fail in one of three ways: the firmware's status
 reads back as -1 (status), the FLASH_READ request fails (cmd), or the page
 buffer read fails (buffer). `bladeRF-cli -e "flash_backup <file> fw"` reads
-pages 0 to 767 (the FX3 firmware region), with the master and P18 builds of
-section 17 ("Each fix alone"). The shim refuses every request that could
-write the flash; it refused none.
+pages 0 to 767 (the FX3 firmware region), with the master and [#1135] builds of
+section 17 ("Each fix alone"). The shim refuses every request that could write
+the flash; it refused none.
 
 | Build | Failure | bladeRF-cli prints | Backup file |
 |---|---|---|---|
@@ -1810,17 +1810,17 @@ write the flash; it refused none.
 | master | status | "Firmware page read (op=100) failed at page 100: -1" | saved; pages 100-767 all zeros |
 | master | cmd | nothing | saved; pages 100-767 all zeros |
 | master | buffer | nothing | saved; pages 100-767 all zeros |
-| P18 | none | - | saved; the same data as master's |
-| P18 | status | the same error, then "flash_backup: Failed to read flash region", "An unexpected error occurred" | none |
-| P18 | cmd | "flash_backup: Failed to read flash region", "File or device I/O failure" | none |
-| P18 | buffer | the same as cmd | none |
+| [#1135] | none | - | saved; the same data as master's |
+| [#1135] | status | the same error, then "flash_backup: Failed to read flash region", "An unexpected error occurred" | none |
+| [#1135] | cmd | "flash_backup: Failed to read flash region", "File or device I/O failure" | none |
+| [#1135] | buffer | the same as cmd | none |
 
 Each failing read stopped after page 100 (no "Done reading 768 pages").
 bladeRF-cli's exit status was 0 in every case, also when the command failed
 (as for every failed `-e` command).
 
-**The full bandwidth sweep in host tuning mode (I1).** `test_ctrl -T host -t
-bandwidth` (the full sweep: 3,448 bandwidth changes) three times with
+**The full bandwidth sweep in host tuning mode ([#1108]).** `test_ctrl -T
+host -t bandwidth` (the full sweep: 3,448 bandwidth changes) three times with
 Nuand's libbladeRF (host-build), then `-T fpga` once as the control, each
 with every Nios packet traced (`lib/nios-trace.c`, test_ctrl only) and the
 trace analyzed with `bin/nios-trace-analyze.py`:
@@ -1835,11 +1835,11 @@ trace analyzed with `bin/nios-trace-analyze.py`:
 - In host tuning mode libbladeRF runs the AD9361 driver on the host: about
   340 Nios requests per bandwidth change, each a short register access (the
   only RFIC packets were 4 status reads, when test_ctrl opened the device).
-  No request keeps the Nios busy, so no status poll times out, and I1
+  No request keeps the Nios busy, so no status poll times out, and [#1108]
   cannot happen. Host tuning mode is libbladeRF's default; FPGA tuning mode
   is selected with `BLADERF_DEFAULT_TUNING_MODE=fpga` or
   `bladerf_set_tuning_mode()`.
-- The control has I1's time-outs as before: 1,261, and 1,279 bandwidth
+- The control has [#1108]'s time-outs as before: 1,261, and 1,279 bandwidth
   changes took 250 ms or more (the traces of 2026-11-13 under 3a768f3d
   below: 1,300 to 1,330 time-outs per run with A and B). This time the Nios
   never answered both polls, so no reply went to the wrong request and the
@@ -2031,7 +2031,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 1. `rx_meta` with two channels overruns about once in 20 runs, with either
    libbladeRF build and every image (16 buffers of 4096 samples at 4 Msps:
    16 ms of slack). Not a regression. On the xA9 in FPGA tuning mode
-   (section 17): 2 of 14 runs with P2 alone (both in one session, at the
+   (section 17): 2 of 14 runs with [#1123] alone (both in one session, at the
    same sample), 0 of 17 with all fixes.
 2. Run times of `ctrl_bandwidth-fpga` vary between 10 and 26 s in every
    configuration; integer-second timings make small differences look large.
@@ -2050,8 +2050,9 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    power cycle (C). A fast run on A hung the FX3 the same way. Five such
    hangs since 2026-11-13: four behind the hub, and one (A, 2026-11-18) with
    the bladeRF on its own port, after which the FX3 came back from a port
-   reset with corrupted descriptors (upstream draft 7e). The cause is open
-   (section 14); an FX3 lockup with a known trigger and fix is item 10.
+   reset with corrupted descriptors (upstream [#1118 comment 3]). The
+   cause is open (section 14); an FX3 lockup with a known trigger and fix is
+   item 10.
    The harness's own run of the test
    (`ctrl_threads-fpga`, with the TX cap and a 5-minute limit) cannot pass:
    the cap clamps the gain thread's TX gains, and the test needs about 10
@@ -2092,8 +2093,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
    transmission brings up to ~0.7 s of short, weak, off-frequency bursts
    (section 13; cause not investigated).
 10. An FX3 lockup with a known trigger and a fix (2026-11-18, the xA9 on a
-    MacBook Air, receive only; not yet a section here, see upstream draft
-    15). A two-channel receive started in FPGA tuning mode in bladeRF-cli's
+    MacBook Air, receive only; not yet a section here, see upstream issue
+    [#1118]). A two-channel receive started in FPGA tuning mode in bladeRF-cli's
     order makes Nuand's libbladeRF reset the receive endpoint while the
     stream's transfers are queued. FX3 firmware 2.6.0 then locked up in 4
     of 14 runs, on every FPGA image, and on Linux on the 6th run (the XPS,
@@ -2107,8 +2108,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 11. To investigate: the FX3 firmware built with the FX3 SDK 1.3.5
     libraries. Nuand's 2.6.0 links the SDK's 1.3.3 libraries: it rebuilds
     byte for byte from the 1.3.5 SDK package with `FX3_SDK_VERSION` "1.3.3"
-    in `fx3_firmware/cmake/fx3-toolchain.cmake` (upstream draft 15). With
-    "1.3.5", with or without item 10's fix, the firmware stops answering
+    in `fx3_firmware/cmake/fx3-toolchain.cmake` (upstream [#1118 comment 2]).
+    With "1.3.5", with or without item 10's fix, the firmware stops answering
     FPGA requests after a flash write until the FX3 reboots: libbladeRF's
     next open times out in `get_fpga_version()`. Seen twice on the xA9
     (2026-11-18 14:56 and 16:25, each right after `bladeRF-cli -f` wrote the
@@ -2129,7 +2130,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     (BLADERF_ERR_UNEXPECTED) instead of BLADERF_ERR_TIMEOUT, and bladeRF-cli's
     `rx wait <time>` never times out: `thread.h`'s `posix_cond_timedwait()`
     returns -1 where its callers expect ETIMEDOUT (section 17; upstream
-    draft I19). Fixed on the local branch `pr/cond-timedwait-timeout`.
+    issue [#1025]). Upstream PR [#1060] makes the same fix as our branch
+    `pr/cond-timedwait-timeout`.
     Programs that poll `bladerf_sync_rx()` with short time-outs (version 1
     of `lib/wiphy-loop.c`) stop on it.
 13. The wlan revision (Nuand's code since 950189d2, 2024-03-06, and the Nios
@@ -2139,7 +2141,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     one-dword reads. With `packet_len` (as before 950189d2) every frame is
     reported (section 17, A/B). 950189d2 made fx3_gpif_packet_tb pass, whose
     consumer holds packet_ready high; a fix must suit both kinds of reader.
-    Upstream draft I20.
+    Upstream issue [#1121].
 14. The adsb revision loses about 1 decoded message in 10,000 (1,000 frames
     a second through the AD9361 loopback), in a fixed pattern in time, not
     from host stalls (section 17). Probable cause: its RX FIFO is exactly
@@ -2162,7 +2164,7 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
     mode, 2026-11-19 23:52, both captures of that run). None at 3.5 GHz or
     below. Seen with A, B and C and in both tuning modes; not seen yet
     with the all-fixes build, in fewer runs (not enough to tell). Not a
-    Nios time-out or a reply to another request (upstream draft I1): in
+    Nios time-out or a reply to another request (upstream issue [#1108]): in
     the four traced low runs the requests, their values and the Nios's
     replies were the same as in normal runs. Cause not found; whether it
     is in the bladeRF or in the B200mini is not known.
@@ -2182,3 +2184,27 @@ On the test host, with the harness checked out at `~/workarea/hwtest`
 
 Add `HOST_BUILD=<fixes build> HWTEST_FIXES=1` to test with the libbladeRF
 fixes.
+
+<!-- Upstream issues and pull requests (Nuand/bladeRF, posted 2026-11-21) -->
+[#1025]: https://github.com/Nuand/bladeRF/issues/1025
+[#1060]: https://github.com/Nuand/bladeRF/pull/1060
+[#1108]: https://github.com/Nuand/bladeRF/issues/1108
+[#1109]: https://github.com/Nuand/bladeRF/issues/1109
+[#1117]: https://github.com/Nuand/bladeRF/issues/1117
+[#1118]: https://github.com/Nuand/bladeRF/issues/1118
+[#1118 comment 2]: https://github.com/Nuand/bladeRF/issues/1118#issuecomment-7072919401
+[#1118 comment 3]: https://github.com/Nuand/bladeRF/issues/1118#issuecomment-7072920046
+[#1120]: https://github.com/Nuand/bladeRF/issues/1120
+[#1121]: https://github.com/Nuand/bladeRF/issues/1121
+[#1122]: https://github.com/Nuand/bladeRF/pull/1122
+[#1123]: https://github.com/Nuand/bladeRF/pull/1123
+[#1124]: https://github.com/Nuand/bladeRF/pull/1124
+[#1125]: https://github.com/Nuand/bladeRF/pull/1125
+[#1126]: https://github.com/Nuand/bladeRF/pull/1126
+[#1127]: https://github.com/Nuand/bladeRF/pull/1127
+[#1128]: https://github.com/Nuand/bladeRF/pull/1128
+[#1129]: https://github.com/Nuand/bladeRF/pull/1129
+[#1130]: https://github.com/Nuand/bladeRF/pull/1130
+[#1131]: https://github.com/Nuand/bladeRF/pull/1131
+[#1134]: https://github.com/Nuand/bladeRF/pull/1134
+[#1135]: https://github.com/Nuand/bladeRF/pull/1135
