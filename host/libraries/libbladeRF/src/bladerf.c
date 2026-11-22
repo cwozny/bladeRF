@@ -692,6 +692,25 @@ int bladerf_get_gain_stages(struct bladerf *dev,
 /* Sample Rate */
 /******************************************************************************/
 
+/* Sample rate assignments rewrite the RFIC channel enables, so 1R1T mode
+ * must be set again after each one. */
+static int reapply_rfic_1r1t(struct bladerf *dev)
+{
+    bool enabled = false;
+    int status;
+
+    if (strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
+        return 0;
+    }
+
+    status = bladerf_get_rfic_1r1t(dev, &enabled);
+    if (status != 0 || !enabled) {
+        return status;
+    }
+
+    return bladerf_set_rfic_1r1t(dev, true);
+}
+
 int bladerf_set_sample_rate(struct bladerf *dev,
                             bladerf_channel ch,
                             bladerf_sample_rate rate,
@@ -714,6 +733,10 @@ int bladerf_set_sample_rate(struct bladerf *dev,
         if (status != 0) {
             log_error("Oversample register config failure\n");
         }
+    }
+
+    if (status == 0) {
+        status = reapply_rfic_1r1t(dev);
     }
 
     return status;
@@ -765,6 +788,10 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
         if (status != 0) {
             log_error("Oversample register config failure\n");
         }
+    }
+
+    if (status == 0) {
+        status = reapply_rfic_1r1t(dev);
     }
 
     return status;

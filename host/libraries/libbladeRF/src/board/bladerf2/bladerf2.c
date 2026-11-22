@@ -105,6 +105,70 @@ static struct bladerf_loopback_modes const bladerf2_loopback_modes[] = {
 /* Low-level Initialization */
 /******************************************************************************/
 
+/* AD9361 registers with the channel enables in bit 7 (RX2/TX2) and bit 6
+ * (RX1/TX1), and the AXI AD9361 core registers for 1R1T (R1) mode */
+#define AD936X_REG_TX_ENABLE_FILTER_CTRL 0x002
+#define AD936X_REG_RX_ENABLE_FILTER_CTRL 0x003
+#define AD936X_CHANNEL_2_ENABLE (1 << 7)
+#define AXI_AD9361_ADC_REG_CNTRL 0x0044
+#define AXI_AD9361_ADC_R1_MODE (1 << 2)
+#define AXI_AD9361_DAC_REG_CNTRL_2 0x4048
+#define AXI_AD9361_DAC_R1_MODE (1 << 5)
+#define AXI_AD9361_DAC_REG_RATECNTRL 0x404C
+
+/* Set the AD9361 digital interface to 1R1T or 2R2T mode. The AD9361 uses 1R1T
+ * timing when only RX1 and TX1 are on, and its DATA_CLK is then half the 2R2T
+ * clock. The AXI AD9361 core must decode the same framing, and its DAC rate is
+ * the number of l_clk (DATA_CLK/2) cycles per sample, minus one. The caller
+ * holds the device lock, if needed. */
+static int _bladerf2_apply_rfic_1r1t(struct bladerf *dev, bool enable)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint16_t const regs[] = { AD936X_REG_RX_ENABLE_FILTER_CTRL,
+                              AD936X_REG_TX_ENABLE_FILTER_CTRL };
+    uint32_t val;
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(regs); ++i) {
+        uint64_t data;
+
+        CHECK_STATUS(dev->backend->ad9361_spi_read(
+            dev, regs[i] | AD936X_READ | AD936X_CNT(1), &data));
+
+        if (enable) {
+            data &= ~((uint64_t)AD936X_CHANNEL_2_ENABLE << 56);
+        } else {
+            data |= ((uint64_t)AD936X_CHANNEL_2_ENABLE << 56);
+        }
+
+        CHECK_STATUS(dev->backend->ad9361_spi_write(
+            dev, regs[i] | AD936X_WRITE | AD936X_CNT(1), data));
+    }
+
+    CHECK_STATUS(dev->backend->adi_axi_read(dev, AXI_AD9361_ADC_REG_CNTRL, &val));
+    if (enable) {
+        val |= AXI_AD9361_ADC_R1_MODE;
+    } else {
+        val &= ~AXI_AD9361_ADC_R1_MODE;
+    }
+    CHECK_STATUS(dev->backend->adi_axi_write(dev, AXI_AD9361_ADC_REG_CNTRL, val));
+
+    CHECK_STATUS(dev->backend->adi_axi_read(dev, AXI_AD9361_DAC_REG_CNTRL_2, &val));
+    if (enable) {
+        val |= AXI_AD9361_DAC_R1_MODE;
+    } else {
+        val &= ~AXI_AD9361_DAC_R1_MODE;
+    }
+    CHECK_STATUS(dev->backend->adi_axi_write(dev, AXI_AD9361_DAC_REG_CNTRL_2, val));
+
+    CHECK_STATUS(dev->backend->adi_axi_write(dev, AXI_AD9361_DAC_REG_RATECNTRL,
+                                             enable ? 0 : 1));
+
+    board_data->rfic_1r1t = enable;
+
+    return 0;
+}
+
 static int _bladerf2_initialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
@@ -195,6 +259,9 @@ static int _bladerf2_initialize(struct bladerf *dev)
      *  - Muting the TX
      */
     CHECK_STATUS(dev->board->set_tuning_mode(dev, default_tuning_mode(dev)));
+
+    /* Start in 2R2T mode, even if a previous session left 1R1T on */
+    CHECK_STATUS(_bladerf2_apply_rfic_1r1t(dev, false));
 
     /* Update device state */
     board_data->state = STATE_INITIALIZED;
@@ -3243,6 +3310,31 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
 
         CHECK_STATUS_LOCKED(rfic->set_filter(dev, ch, 0, txfir));
     });
+
+    return 0;
+}
+
+
+int bladerf_get_rfic_1r1t(struct bladerf *dev, bool *enabled)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+    NULL_CHECK(enabled);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, { *enabled = board_data->rfic_1r1t; });
+
+    return 0;
+}
+
+int bladerf_set_rfic_1r1t(struct bladerf *dev, bool enable)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+
+    WITH_MUTEX(&dev->lock,
+               { CHECK_STATUS_LOCKED(_bladerf2_apply_rfic_1r1t(dev, enable)); });
 
     return 0;
 }

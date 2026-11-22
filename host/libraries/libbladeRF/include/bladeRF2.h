@@ -117,6 +117,45 @@ int CALL_CONV bladerf_set_rfic_register(struct bladerf *dev,
                                         uint8_t val);
 
 /**
+ * Set the RFIC digital interface to 1R1T or 2R2T mode
+ *
+ * In the default 2R2T mode, the interface between the RFIC and the FPGA carries
+ * both RX channels, even when only one streams, and its clock is four times the
+ * sample rate. In 1R1T mode it carries only RX1 and TX1, and its clock is twice
+ * the sample rate. With ::BLADERF_FEATURE_OVERSAMPLE, 1R1T mode lets RX1
+ * stream at 122.88 Msps with the interface clock at 245.76 MHz instead of
+ * 491.52 MHz.
+ *
+ * While 1R1T mode is on, only ::BLADERF_CHANNEL_RX(0) and
+ * ::BLADERF_CHANNEL_TX(0) can stream. Change the mode only while no stream
+ * runs. The mode stays on across sample rate changes, and it is off after the
+ * device is opened.
+ *
+ * @note    This requires an FPGA image with 1R1T support. Older images deliver
+ *          corrupt samples in 1R1T mode.
+ *
+ * @param       dev         Device handle
+ * @param[in]   enable      true for 1R1T mode, false for 2R2T mode
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_rfic_1r1t(struct bladerf *dev, bool enable);
+
+/**
+ * Get the RFIC digital interface mode
+ *
+ * @see bladerf_set_rfic_1r1t()
+ *
+ * @param       dev         Device handle
+ * @param[out]  enabled     true for 1R1T mode, false for 2R2T mode
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rfic_1r1t(struct bladerf *dev, bool *enabled);
+
+/**
  * Read the temperature from the RFIC
  *
  * @param       dev         Device handle
