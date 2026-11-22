@@ -78,12 +78,17 @@ def wide(x, fs):
             "spur_dbc": round(spur - tone, 1), "spur_mhz": round(f[ks] / 1e6, 3)}
 
 
-def blocks(x, fs):
-    """Tone level per BLOCK samples (the tone is F_L above the capture's center)."""
+def block_levels(x, fs):
+    """Tone level (dB) per BLOCK samples (the tone is F_L above the capture's center)."""
     n = len(x) // BLOCK * BLOCK
     t = np.arange(n) / fs
     y = (x[:n] * np.exp(-2j * np.pi * F_L * t)).reshape(-1, BLOCK).mean(axis=1)
-    lvl = 20 * np.log10(np.abs(y) + 1e-12)
+    return 20 * np.log10(np.abs(y) + 1e-12)
+
+
+def blocks(x, fs):
+    """Dropouts: blocks more than DROP_DB below the median tone level."""
+    lvl = block_levels(x, fs)
     med = float(np.median(lvl))
     drops = np.where(lvl < med - DROP_DB)[0]
     return {"blocks": int(len(lvl)), "dropouts": int(len(drops)),
@@ -134,8 +139,12 @@ def main():
             if p.poll() is None:
                 rec.update(wide(rf.b200_capture(u, N_W, FC, FS_W, B200_GAIN), FS_W))
             if p.poll() is None:
-                rec.update(blocks(rf.b200_capture(u, int(FS_L * LONG_S), FC + F_TONE - F_L,
-                                                  FS_L, B200_GAIN), FS_L))
+                xl = rf.b200_capture(u, int(FS_L * LONG_S), FC + F_TONE - F_L, FS_L, B200_GAIN)
+                rec.update(blocks(xl, FS_L))
+                tag = "%s-tx%s%s-%s" % (name, ch, "-iso" if iso else "", time.strftime("%H%M%S"))
+                np.save(os.path.join(out, "levels-%s.npy" % tag), block_levels(xl, FS_L).astype(np.float32))
+                if rec["dropouts"]:
+                    np.save(os.path.join(out, "long-%s.npy" % tag), xl)
             if p.poll() is not None:
                 rec["ended_early"] = True
         except Exception as e:
