@@ -79,10 +79,16 @@ def wide(x, fs):
 
 
 def block_levels(x, fs):
-    """Tone level (dB) per BLOCK samples (the tone is F_L above the capture's center)."""
+    """Tone level (dB) per BLOCK samples. The tone is near F_L above the capture's
+    center, off by the two clocks' difference (2 ppm is 5 kHz at 2.45 GHz, a null of a
+    1 ms block mean), so it is mixed down from its measured frequency."""
     n = len(x) // BLOCK * BLOCK
+    sp = np.abs(np.fft.fft(x * np.blackman(len(x))))
+    f = np.fft.fftfreq(len(x), 1 / fs)
+    idx = np.where(np.abs(f - F_L) <= 20e3)[0]
+    ft = f[idx[int(np.argmax(sp[idx]))]]
     t = np.arange(n) / fs
-    y = (x[:n] * np.exp(-2j * np.pi * F_L * t)).reshape(-1, BLOCK).mean(axis=1)
+    y = (x[:n] * np.exp(-2j * np.pi * ft * t)).reshape(-1, BLOCK).mean(axis=1)
     return 20 * np.log10(np.abs(y) + 1e-12)
 
 
@@ -102,6 +108,10 @@ def self_test():
     t = np.arange(n) / fs
     x = 0.1 * np.exp(2j * np.pi * F_L * t)
     assert blocks(x, fs)["dropouts"] == 0
+    rng = np.random.default_rng(1)
+    xo = 0.1 * np.exp(2j * np.pi * (F_L + 5035) * t) + 0.003 * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
+    r = blocks(xo, fs)
+    assert r["dropouts"] == 0 and r["block_spread_db"] < 1, r   # 5 kHz clock offset
     x[400000:400100] = 0          # a 50 us gap
     r = blocks(x, fs)
     assert r["dropouts"] == 0, r  # inside one 1 ms block: -0.4 dB only
