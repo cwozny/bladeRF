@@ -1851,7 +1851,7 @@ trace analyzed with `bin/nios-trace-analyze.py`:
   run passed: a failure needs the Nios to finish in the ~0.2 ms between a
   time-out and the next poll (README.md).
 
-### 21. 1R1T mode: one channel at 122.88 Msps on the xA5 (2026-11-21/22)
+### 21. 1R1T mode: one channel at 122.88 Msps on the xA5 and the xA9 (2026-11-21/22)
 
 The OVERSAMPLE feature keeps both AD9361 receive channels on (register
 0x003 = 0xD4), so the AD9361-FPGA interface runs in 2R2T mode, with DATA_CLK
@@ -2040,6 +2040,48 @@ corrupted values. That points to the USB link's limit, not the interface (not
 yet checked with a control run). TX through the interface is bit-exact up to
 92.16 Msps on both channels.
 
+**FPGA tuning mode, TX at RF, and the xA9 (R4 and R4-A9, 2026-11-22).** AUTO
+mode, 122.88 Msps with OVERSAMPLE unless noted. TX at RF: `bin/r1-txrf.py`
+(job script `txrf-r4.sh`), cabled TX1 and TX2 through a 20 dB pad each into
+the splitter and on to the B200mini's "RX2", every other port terminated; the
+bladeRF sends a tone at FC + 3 MHz (FC 2450 MHz, TX gain 30 dB, TX cap), the
+B200mini measures it at 16 Msps around FC and counts 1 ms dropouts over 4 s
+at 2 Msps. A port swap is unlikely: in 1R1T mode the AD9361 powers only the
+selected TX channel (0x002 reads 0x40 or 0x80). Jobs `xa5r4f`, `txrfa5` (xA5),
+`xa9tx`, `txrfa9b`, `xa9rxrf` (xA9; the board behind the adapter's hub, as the
+xA5).
+
+| Check | xA5 RX1 / TX1 | xA5 RX2 / TX2 | xA9 RX1 / TX1 | xA9 RX2 / TX2 |
+|---|---|---|---|---|
+| FPGA tuning mode: `test_1r1t_state`; meta; counter 30 s; BIST SC8 60 s | pass (31 of 31); pass; no jump; 7.39e9, 0 bad | pass; no jump; 7.39e9, 0 bad | | |
+| `test_1r1t_state`, host tuning mode | | | pass (31 of 31) | |
+| meta timestamps (SC8 AUTO, SC16 ON); OFF SC8 | | | pass, pass; pass | pass, pass |
+| FPGA counter (`test_1r1t_stream`), 60 s | (above) | (above) | 7.37e9, no jump, 122.880 Msps | 7.37e9, no jump, 122.880 Msps |
+| AD9361 test pattern (BIST SC8), 300 s | (above) | (above) | 3.69e10, 0 bad | 3.69e10, 0 bad |
+| AD9361 loopback (`-A`, SC8) | (above) | (above) | bit-exact at 76.8, 92.16; 122.88 fails (90.2 Msps) | the same |
+| TX alone (`hwtest-stream tx`), 20 s: libbladeRF took | 100.3 % (FPGA and host tuning mode) | 100.3 % (both) | 100.3 % | 100.3 % |
+| TX at RF, 1R1T: tone, image, carrier leak, worst spur | -45.4 dBFS, -36, -35, -53 dBc | -45.5 dBFS, -35, -34, -53 dBc | -46.5 dBFS, -37, -40, -56 dBc | -46.3 dBFS, -35, -36, -53 dBc |
+| TX at RF, 2R2T at 61.44 (reference) | -45.5 dBFS, -36, -35, -53 dBc | -45.5 dBFS, -35, -34, -56 dBc | -46.4 dBFS, -36, -42, -57 dBc | -46.2 dBFS, -35, -36, -55 dBc |
+| TX at RF, 2R2T at 122.88 (OFF) | broken: tone -51.3 dBFS, image -0.3 dBc | broken (the same) | broken: image 0.0 dBc | broken (the same) |
+| TX at RF: dropouts in 4 s (1R1T, 2R2T 61.44) | 0, 0 | 0, 0 | 0, 0 | 0, 0 |
+| 2R2T regression, BIST SC16 at 61.44 | | | 6.3e8, 0 bad | 6.3e8, 0 bad |
+| image A with this libbladeRF: `test_1r1t_state`; BIST SC16 61.44 | | | pass (7 of 7); 6.3e8, 0 bad | |
+| RX tone at +3 MHz (`r1-rf.py auto`) | (above) | (above) | -33.9 dBFS, image -36 dBc (2R2T 61.44: -38.2, -62) | -35.2 dBFS, image -34 dBc (2R2T 61.44: -39.4, -62) |
+
+The loopback in the AD9361 cannot run in FPGA tuning mode: libbladeRF allows
+the RFIC BIST loopback only in host tuning mode. The first xA9 TX runs showed
+26 to 595 "dropouts" per run, in 2R2T at 61.44 Msps as well. They were the
+analysis's: the xA9's clock is about 2 ppm off the B200mini's, 5 kHz at
+2.45 GHz, a null of the 1 ms block mean, so the block levels followed the
+noise (the xA5's 3.3 kHz offset was clear of it). `r1-txrf.py` now mixes the
+tone down from its measured frequency; the saved xA9 captures then give 0
+dropouts and a 0.08 to 0.13 dB spread. On both
+boards the worst RX spur at 122.88 Msps is -32 to -38 dBc, 48 to 61 MHz from
+the center (xA9 -32 to -35, xA5 -36 to -38), against -38 to -43 dBc at 61.44
+Msps; the xA5's working 2R2T run at 122.88 (0x006 = 0x70, R) had a -34 dBc
+worst spur too. RX2 reads the tone about 1.3 dB lower than RX1 on the xA9 as
+on the xA5, in both modes.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -2223,8 +2265,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 ### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps
 
 On the fork since 2026-11-22; not proposed upstream yet (section 21).
-Built and tested on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II);
-an xA9 image is built but not run.
+Built and tested on the xA5 and the xA9 (R4, R4-A9), with Quartus Prime Lite
+23.1.1 (Nios II).
 
 - 10494cab hdl: the 1R1T frames in the AD9361 interface module, the R1
   bits exported from the core, the time tamers and the hosted top level.
@@ -2399,13 +2441,11 @@ an xA9 image is built but not run.
     for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
     runs should avoid those minutes, or check losses there against the system
     log.
-18. Not yet covered in 1R1T mode (section 21): transmit at the RF ports
-    (TX was checked only through the AD9361 loopback, into the loads),
-    timestamped (scheduled) transmit, SC16_Q11_PACKED, RF recordings to
-    disk at 122.88 Msps, FPGA tuning mode with the automatic selection, the
-    `niosv` branch, the xA4, and the xA9 (image R4-A9 is built, not run).
+18. Not yet covered in 1R1T mode (section 21): timestamped (scheduled)
+    transmit, the TX level across the band (only FC + 3 MHz), SC16_Q11_PACKED,
+    RF recordings to disk at 122.88 Msps, the `niosv` branch and the xA4.
     The other revisions (wlan, adsb, foxhunt) build the same Qsys system but
-    do not use 1R1T mode; only hostedxA5 (and R4-A9) were built. FPGA
+    do not use 1R1T mode; only hostedxA5 and hostedxA9 were built. FPGA
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
     support would wrongly get AUTO.
 
