@@ -2082,6 +2082,89 @@ Msps; the xA5's working 2R2T run at 122.88 (0x006 = 0x70, R) had a -34 dBc
 worst spur too. RX2 reads the tone about 1.3 dB lower than RX1 on the xA9 as
 on the xA5, in both modes.
 
+**Scheduled TX, repeated starts, a soak, Nios V and every fork change (xA9,
+2026-11-22).** New on branch `1r1t`: `test_1r1t_txsched` (48eb1329;
+4d8467b9 finds a burst by the numbers of its first two samples, since the
+TX holds its last sample between bursts; 7ac9f992 keeps up with the RX
+stream and adds `-r`, `-o`, `-n`), `test_1r1t_stream -n` (b1f3f9f7), the
+fifo_reader model cf388a33 and the fifo_reader fix c7ac1500 (below). Two local
+test branches, not on the fork: `1r1t-niosv` (1r1t + niosv) and `fork-all`
+(1r1t-niosv + adsb-fix + pr/cond-timedwait-timeout + the 12 pr/* branches +
+fx3-epnak-master); every merge was clean. Images with Quartus Prime Lite 25.1
+(Nios V), from 9495d531 and 35cbda3d (before the fix): N4 = hostedxA5 (setup
+-0.068 ns, hold +0.072 ns), N4-A9 = hostedxA9 (+0.236 ns, +0.062 ns); fork-all's
+N5 and N5-A9 are byte-identical to N4 and N4-A9. R5-A9 = R4-A9 + the fix
+(Lite 23.1.1, +0.121 ns, +0.058 ns). The xA9 was in the RX cabling (B200mini ->
+splitter -> a 20 dB pad each -> RX1, RX2; TX1, TX2 terminated), behind the
+adapter's hub. Jobs `xa9940`, `xa9p1`, `xa9p1b`, `xa9p2`, `xa9p3`,
+`xa9txdiag`, `r5a9`.
+
+| Check (122.88 Msps, AUTO, unless noted) | R4-A9, 1r1t libbladeRF | N4-A9, 1r1t libbladeRF | N5-A9, fork-all libbladeRF |
+|---|---|---|---|
+| Test 2: 20 stream cycles in one session; 50 sessions (each channel) | pass; 50 of 50 | pass; 50 of 50 | pass; 50 of 50 |
+| Soak: BIST SC8, 15 min per channel | 1.11e11 samples each, 0 bad | 1.11e11 samples each, 0 bad | not run |
+| `test_1r1t_state`; meta (SC8 AUTO, SC16 ON); counter 60 s; BIST 300 s (each channel) | (earlier, R4-A9) | 31 of 31; pass; no jump; 3.69e10, 0 bad | 31 of 31; pass; no jump; 3.69e10, 0 bad |
+| RX tone at +3 MHz: RX1, RX2 (tone, image) | (earlier) | -34.2 dBFS, -35 dBc; -35.4 dBFS, -34 dBc | (run-suite) |
+| AD9361 loopback 76.8, 92.16; 122.88 | (earlier) | bit-exact; fails, USB limit (90.2 Msps) | |
+| TX alone, 20 s (host and FPGA tuning mode) | (earlier) | 100.3 % | |
+| FPGA tuning mode: state, meta, counter 30 s, BIST 60 s | (earlier) | 31 of 31, pass, no jump, 0 bad | |
+| 2R2T regression, BIST SC16 61.44 | (earlier) | 0 bad | |
+| run-suite.sh, receive only (smoke host fpga formats oc sched bist), HWTEST_FIXES=1 | | | 112 tests, 3 failed: rx_meta_8bit_mimo-host (overrun), sched_sc16meta_x1-host and sched_sc8meta_x2-host (one burst each after a 60-75 ms host pause); bist_oc_122M88 passes (it fails on image A) |
+| run-suite.sh twoch, HWTEST_2CH=rx (only the B200mini transmits) | | | 4 tests, 0 failed |
+
+**Test 1, scheduled TX bursts.** `test_1r1t_txsched` sends 100 bursts of
+4,096 numbered samples, P apart, through the AD9361's internal loopback
+(TX1->RX1, TX2->RX2) and checks their RX timestamps and samples. Three things
+came out:
+
+- **libbladeRF does not schedule SC8_Q7_META bursts** (Nuand's code, either
+  mode): `handle_tx_parameters()` in `streaming/sync.c` reads the burst flags
+  and the timestamp only for SC16_Q11_META. With SC8_Q7_META the first burst
+  left at once (0.1 s before its timestamp) and the rest followed back to
+  back (all images). OVERSAMPLE allows only 8-bit formats, so a scheduled TX
+  at an OVERSAMPLE rate is not possible with Nuand's libbladeRF.
+- **1R1T sent the start of every timed burst early** (SC16_Q11_META, mode ON,
+  R4-A9 and N4-A9, both channels): an RX dump showed burst 1's samples 0-28
+  leave about 1,700 samples after the previous buffer, the TX hold sample 28
+  for 579,966 samples, and samples 29-4,095 leave exactly at the burst's
+  timestamp (delay 37 samples, as burst 0); burst 2 sent 55 samples early.
+  Cause: fifo_reader's META_DOWNCOUNT counts the registered read strobe and
+  ends a message at `dma_downcount <= 2`, which assumes a FIFO read every
+  fourth clock; in 1R1T with 16-bit samples the FIFO is read every other clock,
+  the end is found one read late, and META_LOAD lets the next message's first
+  word through without counting it. Each message boundary moves the data one
+  word (2 samples) ahead of its metadata. The cycle model
+  (`tb/models/fifo_reader_1r1t_model.py`) gives 33 and 65 early samples for
+  bursts 1 and 2 (31 uncounted reads in 32 messages; 0 in 2R2T). c7ac1500 ends
+  the message at `<= 4` with back_to_back_en and 16-bit samples (2R2T and
+  8-bit unchanged). R5-A9 with the fix: 1R1T at 61.44 Msps on both channels
+  passes (100 of 100 bursts bit-exact, exactly P apart, delay 37 throughout),
+  and test_1r1t_state, meta, counter, BIST, the loopback and TX alone pass as
+  before.
+- Two smaller effects, in both modes and in Nuand's design: (1) at 30.72 Msps
+  (no overruns) the first burst's delay is one sample longer than the rest
+  (20 then 19 in 2R2T, 37 then 36 in 1R1T with the fix): the model shows the
+  next burst's first sample leaving during META_LOAD and the TX holding it
+  until the burst's time, so its second sample takes the first one's place;
+  (2) at 61.44 Msps the RX stream overran about 130 times in 1.5 s (TX and RX
+  together, behind the hub; 0 at 30.72), and after the overruns the 2R2T delay
+  read 2 samples shorter (20 to 18, once 3) while 1R1T stayed at 37. Not yet
+  checked: whether the 2R2T RX timestamps move after an RX overrun.
+
+**Nuand/bladeRF#940** ("Sample Rate is Halved When Using
+BLADERF_FEATURE_OVERSAMPLE"), job `xa9940`, 50 Msps, SC8, RX1: not
+reproduced. On image A with the harness's Nuand host build, and on R4-A9 with
+the 1r1t libbladeRF (AUTO: 1R1T, 0x003 = 0x54), with OVERSAMPLE on and off,
+and with `bladerf_set_sample_rate()` and `bladerf_set_rational_sample_rate()`
+(which `bladeRF-cli set samplerate` uses): the FPGA counter arrived at 49.995
+to 50.001 Msps without a jump, and the B200mini tone at +3 MHz landed at
++2.995 MHz in all 8 captures (the 5 kHz is the clocks' difference); half the
+rate would put it at +6 MHz. Both functions read back 50,000,000.
+
+Not run: the FX3 endpoint-NAK firmware and ctrl_threads under it. The xA9 is
+behind the adapter's hub (USB 2-1.3), and the 11-19 flash procedure
+(`xa9-nak-master.sh`) writes the FX3 firmware only to a board on a root port.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -2265,8 +2348,8 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
 ### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps
 
 On the fork since 2026-11-22; not proposed upstream yet (section 21).
-Built and tested on the xA5 and the xA9 (R4, R4-A9), with Quartus Prime Lite
-23.1.1 (Nios II).
+Built and tested on the xA5 and the xA9 (R4, R4-A9, R5-A9) with Quartus Prime
+Lite 23.1.1 (Nios II), and with the Nios V port (N4-A9, Lite 25.1).
 
 - 10494cab hdl: the 1R1T frames in the AD9361 interface module, the R1
   bits exported from the core, the time tamers and the hosted top level.
@@ -2441,9 +2524,12 @@ Built and tested on the xA5 and the xA9 (R4, R4-A9), with Quartus Prime Lite
     for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
     runs should avoid those minutes, or check losses there against the system
     log.
-18. Not yet covered in 1R1T mode (section 21): timestamped (scheduled)
-    transmit, the TX level across the band (only FC + 3 MHz), SC16_Q11_PACKED,
-    RF recordings to disk at 122.88 Msps, the `niosv` branch and the xA4.
+18. Not yet covered in 1R1T mode (section 21): a scheduled TX at an
+    OVERSAMPLE rate (libbladeRF cannot schedule SC8_Q7_META bursts), the
+    fifo_reader fix c7ac1500 in a Nios V or xA5 image, the TX level across the
+    band (only FC + 3 MHz), RF recordings to disk at 122.88 Msps, the FX3 NAK
+    firmware with every fork change and ctrl_threads under it (needs the xA9
+    on a root port), and the xA5 with every fork change.
     The other revisions (wlan, adsb, foxhunt) build the same Qsys system but
     do not use 1R1T mode; only hostedxA5 and hostedxA9 were built. FPGA
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
