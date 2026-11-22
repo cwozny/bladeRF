@@ -54,11 +54,11 @@ LD_PRELOAD="$TX_CAP" "$TX_CAP_TEST" --selftest || die "TX cap does not load"
 log "Building hwtest-stream (streaming checks: formats, oc, trigger, fullsoak, bist phases)"
 cc -O2 -Wall -Wextra -Werror -I"$inc" \
     -o "$HOST_BUILD/output/hwtest-stream" "$HWTEST_DIR/lib/hwtest-stream.c" \
-    -L"$HOST_BUILD/output" -lbladeRF -lpthread -lm
+    -L"$HOST_BUILD/output" -lbladeRF -lpthread -lm -ldl
 # Its BIST checker against synthetic data (no hardware)
 cc -O2 -Wall -Wextra -Werror -Wno-unused-function -I"$inc" -I"$HWTEST_DIR/lib" \
     -o "$HOST_BUILD/output/hwtest-bist-selftest" "$HWTEST_DIR/lib/bist-selftest.c" \
-    -L"$HOST_BUILD/output" -lbladeRF -lpthread -lm
+    -L"$HOST_BUILD/output" -lbladeRF -lpthread -lm -ldl
 LD_LIBRARY_PATH="$HOST_BUILD/output" "$HOST_BUILD/output/hwtest-bist-selftest" \
     > "$HOST_BUILD/hwtest-bist-selftest.log" ||
     die "BIST checker self-test failed, see $HOST_BUILD/hwtest-bist-selftest.log"
