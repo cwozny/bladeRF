@@ -1879,7 +1879,8 @@ for 30 s per channel (3.69e9 samples, 0 bad). Nuand's default (0x50, DATA_CLK
 delay 5) does not lock. Image C gave the same windows. Each clean window
 is one step wide.
 
-**The change** (branch `1r1t` on master 35174c30, local only):
+**The change** (branch `1r1t` on master 35174c30; on the fork since
+2026-11-22):
 
 - `axi_ad9361_dev_if_alt.v`: the 1R1T receive frames (the frame is high for
   the two msb words of each sample, so each l_clk cycle holds 4'b0011,
@@ -1897,7 +1898,7 @@ is one step wide.
   bladeRF2.h turn RX2 and TX2 off in the AD9361, and set the core's R1 bits
   and a DAC rate of one sample per clock. The mode is set again after each
   sample rate change, and it is off after every open. While it is on,
-  enabling RX2 or TX2 fails.
+  enabling RX2 or TX2 fails. (Replaced by the automatic selection below.)
 - hwtest-stream: `-1` (1R1T mode), `-w` (analog bandwidth), `-X` (print
   the first received loopback samples).
 - `r1-state.c`, `r1-meta.c` and the two cycle models, used below, are on
@@ -1978,6 +1979,66 @@ libbladeRF keeps the RX filter at its 18 MHz default unless the bandwidth
 is set after the sample rate (with OVERSAMPLE it warns that the result is
 unknown). The image rejection with OVERSAMPLE, about -38 dBc near the
 center, is the overclock's: the same in 1R1T and 2R2T.
+
+**Automatic mode on either channel (R4, 2026-11-22).** The branch then
+added:
+
+- 797e214f hdl: FPGA version 0.17.0, a placeholder until Nuand assigns one;
+  libbladeRF can tell images with 1R1T support apart only by the version.
+- 6a00637f libbladeRF: `bladerf_set_rfic_1r1t_mode()` and
+  `bladerf_get_rfic_1r1t_mode()` replace `bladerf_set_rfic_1r1t()`: AUTO
+  (the default after every open), OFF (2R2T always) or ON (1R1T at every
+  rate); `bladerf_get_rfic_1r1t()` reports the current mode. AUTO uses 1R1T
+  mode while OVERSAMPLE is on, the FPGA has `BLADERF_CAP_FPGA_RFIC_1R1T`
+  (v0.17.0 or later) and at most one RX and one TX channel are enabled. It
+  decides after each sample rate change and before each enable, never on a
+  disable, and writes nothing when 2R2T mode is wanted and already on.
+- db5be887 hdl and 82551d8e libbladeRF: 1R1T mode on either channel, RX
+  and TX independently. Bits 7:6 of the AD9361's 0x003 (RX) and 0x002 (TX)
+  are 01 for channel 1 and 10 for channel 2; the core carries the channel
+  that is on as its channel 0, and the hosted top level gives it to both RX
+  slots and loads the TX data from the slot that has it. The MIMO enables
+  pick the slot. A second channel of one direction gives 2R2T mode in AUTO
+  and is refused in ON.
+- c5079fb5, 1683a817, 7c722924 and 09953fe5 test: `test_1r1t_state`,
+  `test_1r1t_meta` and `test_1r1t_stream` in `host/libraries/libbladeRF_test/`
+  (from `r1-state.c` and `r1-meta.c`, plus a counter check at 122.88 Msps;
+  `-c` selects the channel); c91131a3 the two cycle models in
+  `hdl/fpga/platforms/bladerf-micro/vhdl/tb/models/`.
+- hwtest-stream `-1` is mode ON (either channel) and `-2` mode OFF; without
+  them libbladeRF's AUTO applies. `bin/r1-rf.py ... auto 1|2` measures the
+  tone at +3 MHz on either channel.
+
+Images (Quartus Prime Lite 23.1.1, Nios II, worst setup slack): hostedxA5
+R4a = c91131a3 (AUTO on channel 1 only; interim, -0.188 ns) and R4 = 09953fe5
+(-0.197 ns, hold +0.024 ns; the same AD9361 RX LVDS path as every build);
+hostedxA9 R4-A9 = 09953fe5 (setup +0.046 ns, hold +0.052 ns; built, not run:
+the boards must be swapped). Job `xa5r4`
+(`results/xa5r4-20261122-065435`); R4 and AUTO unless noted, 122.88 Msps with
+OVERSAMPLE:
+
+| Check | RX1 / TX1 | RX2 / TX2 |
+|---|---|---|
+| `test_1r1t_state` (all mode changes, both channels, TX1 and TX2 on for a moment into the loads) | pass, 31 of 31 checks | |
+| AD9361 test pattern (BIST SC8), 300 s | 3.69e10 samples, 0 bad | 3.69e10 samples, 0 bad |
+| FPGA counter (`test_1r1t_stream`), 60 s | 7.37e9 samples, no jump, 122.880 Msps | 7.37e9 samples, no jump, 122.879 Msps |
+| meta timestamps (`test_1r1t_meta`): SC8 122.88 AUTO; SC16 61.44 ON | pass; pass | pass; pass |
+| AD9361 loopback (`-A`, SC8) at 76.8, 92.16 and 122.88 | bit-exact at 76.8 and 92.16; 122.88 fails (below) | bit-exact at 76.8 and 92.16; 122.88 fails (below) |
+| B200mini tone at +3 MHz (RX gain 15 dB): level, I/Q image | -34.2 dBFS, -41 dBc | -35.3 dBFS, -46 dBc |
+| the same in 2R2T at 61.44 Msps (no OVERSAMPLE) | -38.2 dBFS, -64 dBc | -39.4 dBFS, -62 dBc |
+| 2R2T: counter at 122.88 (OFF), 10 s; BIST SC16 at 61.44, 10 s | pass (1.23e9 samples); 6.3e8 samples, 0 bad | not run; 6.3e8 samples, 0 bad |
+| Image A with this libbladeRF: `test_1r1t_state` (AUTO stays 2R2T, ON refused), BIST SC16 at 61.44 | pass (7 of 7); 6.3e8 samples, 0 bad (RX1) | |
+
+`test_1r1t_state` also showed that an RX bandwidth (56 MHz), frequency or gain
+change after the rate keeps 1R1T mode. The B200mini reaches both RX ports
+through the splitter: RX2 reads the tone about 1.2 dB lower than RX1 in both
+modes, a path difference. The loopback at 122.88 Msps failed on both channels
+in the same way: TX and RX together reached only 90.2 Msps (libbladeRF warns
+that 245.76 Msps in total is above its 160 Msps recommendation), and the wrong
+samples were other values of the sequence (gaps of lost or late blocks), not
+corrupted values. That points to the USB link's limit, not the interface (not
+yet checked with a control run). TX through the interface is bit-exact up to
+92.16 Msps on both channels.
 
 ## Evidence per change
 
@@ -2159,10 +2220,11 @@ checked alone against master on the xA9 (section 17, "Each fix alone").
   the ADS-B loopback's frames alike, every message exact, both losing about
   1 frame in 10,000 (open item 14).
 
-### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps (local)
+### Branch `1r1t`: 1R1T mode for one channel at 122.88 Msps
 
-Not on the fork and not proposed upstream yet (section 21). Built and tested
-on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II).
+On the fork since 2026-11-22; not proposed upstream yet (section 21).
+Built and tested on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II);
+an xA9 image is built but not run.
 
 - 10494cab hdl: the 1R1T frames in the AD9361 interface module, the R1
   bits exported from the core, the time tamers and the hosted top level.
@@ -2179,6 +2241,16 @@ on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II).
   message timestamps 4,089/2,046 apart without it, 4,088/2,044 with it.
 - d15ec490 libbladeRF: RX2 and TX2 refused in 1R1T mode. Evidence:
   r1-state.c (RX2; TX2 is refused by the harness's no-TX guard first).
+- 797e214f hdl: FPGA version 0.17.0. Evidence: R4 reports v0.17.0, and
+  libbladeRF selects 1R1T mode on it and not on image A.
+- 6a00637f libbladeRF: automatic 1R1T selection (AUTO, OFF, ON). Evidence:
+  `test_1r1t_state` on R4 and on image A.
+- c5079fb5, 1683a817, 7c722924 test, c91131a3 hdl models: the 1R1T tests.
+  Evidence: they pass on R4 (section 21).
+- db5be887 hdl, 82551d8e libbladeRF, 09953fe5 test: 1R1T mode on either
+  channel. Evidence: on R4, RX2 bit-exact at 122.88 Msps (BIST, counter),
+  meta timestamps exact, the loopback TX2 to RX2 and the tone at +3 MHz as
+  on channel 1.
 
 ## Known noise and open items
 
@@ -2327,11 +2399,15 @@ on the xA5 only, with Quartus Prime Lite 23.1.1 (Nios II).
     for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
     runs should avoid those minutes, or check losses there against the system
     log.
-18. Not yet covered in 1R1T mode (section 21): timestamped (scheduled)
-    transmit, SC16_Q11_PACKED, RF recordings to disk at 122.88 Msps, the
-    `niosv` branch, the xA4 and the xA9. The other revisions (wlan, adsb,
-    foxhunt) build the same Qsys system but do not use 1R1T mode; only
-    hostedxA5 was built.
+18. Not yet covered in 1R1T mode (section 21): transmit at the RF ports
+    (TX was checked only through the AD9361 loopback, into the loads),
+    timestamped (scheduled) transmit, SC16_Q11_PACKED, RF recordings to
+    disk at 122.88 Msps, FPGA tuning mode with the automatic selection, the
+    `niosv` branch, the xA4, and the xA9 (image R4-A9 is built, not run).
+    The other revisions (wlan, adsb, foxhunt) build the same Qsys system but
+    do not use 1R1T mode; only hostedxA5 (and R4-A9) were built. FPGA
+    version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
+    support would wrongly get AUTO.
 
 ## How to repeat
 
