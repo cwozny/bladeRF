@@ -2224,6 +2224,87 @@ in 1R1T mode on both channels: every burst bit-exact, exactly P apart, at one
 delay. The 2R2T references still fail the strict check by the one-sample
 effect described above (Nuand's design, both sample sizes).
 
+### 22. Timed TX bursts: two fifo_reader faults, their fixes, and 1R1T v2 (2026-11-22)
+
+**The check.** `bin/txburst-check.py` sends numbered timed bursts (16 bursts of 4096 samples, 1 ms
+apart unless noted) through the Python binding into the AD9361's internal loopback and checks every
+received sample, the gaps included; `test_1r1t_txsched` checks only the bursts, so it never saw
+what follows. TX gain at its minimum on every TX channel, all TX ports on 50 ohm loads. SC16 runs
+use Nuand's libbladeRF (`host-build`); SC8 runs use `host-build-sc8`, because Nuand's libbladeRF
+sends timed SC8_Q7_META bursts at once (`pr/sc8-meta-tx`, upstream draft I26).
+
+**Two faults in Nuand's `fifo_reader.vhd`** (image A, v0.16.0, with Nuand's libbladeRF; xA9 and
+xA5 alike):
+1. Bursts after the first leave one sample early, and the gap before each burst holds the burst's
+   first sample instead of zeros (one channel with SC16 or SC8; two channels with SC8). At 30.72
+   Msps the held sample lasted 22,544 samples of each 1 ms period. In the meta FSM, `meta_time_go`
+   stays high while META_LOAD runs at the end of a message, so a sample request there reads the
+   next message's first sample, and bladerf-hosted.vhd's DAC register, which latches only valid
+   samples, holds it until the burst's timestamp (the cause is from code reading and a cycle
+   model; the effect is measured). Upstream draft I27.
+2. Two channels with SC16: bursts after the first leave 19,475 to 19,588 samples early (8192-sample
+   TX buffers) and lose or cut samples; the offset changes by one sample per message (8 per burst
+   with 8192-sample buffers, 16 with 32768). With two 16-bit channels the FIFO is read on every
+   sample request; a read during META_LOAD or META_WAIT takes the next message's first word, and
+   META_WAIT starts the next message's count without it. Upstream draft I28.
+
+Continuous timed streams are not affected: the samples stay in order.
+
+**The fixes**, each one commit on master 35174c30: `pr/fifo-reader-early-sample` (P27): at the end
+of a message, samples go on through META_LOAD only when the next message follows without a gap, or
+is to be sent now; `pr/fifo-reader-msg-count` (P28): the reads made during META_LOAD and META_WAIT
+count toward the next message. They merge without a conflict (`test-fifo-reader-both`). Images
+built with Quartus Prime Lite 23.1.1: G (both), GA (P27 only), GB (P28 only).
+
+| Case | A (Nuand) | GA (P27) | GB (P28) | G (both) |
+|---|---|---|---|---|
+| 1 channel SC16, 30.72 and 61.44 Msps, TX1 and TX2 | 1 early, gaps held | pass | 1 early, gaps held | pass |
+| 1 channel SC8 (OVERSAMPLE, 2R2T), 61.44 Msps | 1 early, gaps held | pass | 1 early, gaps held | pass |
+| 2 channels SC8, 30.72 Msps | 1 early, gaps held | pass | 1 early, gaps held | pass |
+| 2 channels SC16, 30.72 Msps | about 19,500 early, 60,480 wrong samples | still drifts | 1 early, gaps held | pass |
+| continuous: 1 channel SC16 30.72 and SC8 61.44, 2 channels SC16 15.36 | pass | pass | pass | pass |
+
+xA9: all four images; xA5: A and G, with the same results. "Pass" is one fixed delay for every
+burst, zeros in every gap and every burst sample right. With image A, a zero first sample in every
+burst (`--zero-first`) gives zeros in the gaps and the payload on time; only the first burst after
+the TX start then leaves one sample late. Limits of the check: two 16-bit channels at 30.72 Msps,
+continuous or with 32768-sample TX buffers, overrun the RX (USB 3), with any image; those cases run
+at 15.36 Msps. A stream cut short leaves its last sample in the DAC register, and the next run sees
+it before its first burst.
+
+**1R1T v2.** `pr/1r1t` is rebuilt on P27 and P28 (force-pushed, 723b2e1f): its `fifo_reader`
+commit now makes the meta FSM count the FIFO's own read strobe, which in 1R1T mode advances the
+FIFO in the cycle of the request, so a message ends at the read that takes its last word. That
+replaces c7ac1500 (end 16-bit messages one read earlier) and 7c43dc3b (hold 8-bit samples at a
+burst's start). R7 (Nios II, this branch with `pr/sc8-meta-tx`) and N7 (`fork-all-v2`: Nios V,
+1R1T v2 and every fork fix, Quartus Prime Lite 25.1) on the xA9 and the xA5: `test_1r1t_state`,
+`test_1r1t_txsched` (SC8 AUTO 122.88 and SC16 ON 61.44 Msps, both channels), `test_1r1t_meta`,
+`test_1r1t_stream` and `txburst-check.py` (1R1T bursts with SC8 at 122.88 and 61.44 and SC16 at
+61.44 Msps on both channels; continuous 1R1T SC8 at 61.44 and SC16 at 30.72 Msps; 2R2T with one and
+two channels): 17 of 17 pass per board and image. Continuous 1R1T TX and RX at 122.88 Msps (SC8)
+or 61.44 Msps (SC16) together overrun the RX (USB 3).
+
+**RX timing of the new builds.** Worst setup slack, all on the AD9361 RX LVDS capture: G -0.322 ns
+(xA5), +0.357 ns (xA9); R7 -1.076 ns (xA5), -0.528 ns (xA9); N7 -0.791 ns (xA5), -0.225 ns (xA9);
+master's build -0.154 ns (xA5). On the boards: AD9361 BIST 60 s per channel clean for every image
+(122.88 Msps 1R1T for R7 and N7, 61.44 Msps 2R2T for G and A), and the RX delay sweep (register
+0x006, 1 s per setting) found the same clean window for A, G, R7 and N7 on the xA5: clock delay 1
+to 5, where the default (5) sits at the window's edge, with Nuand's image too; on the xA9, R7-A9
+was clean from 2 to 7.
+
+**FX3 endpoint-NAK firmware with every fork change (xA9).** Job `xa9nakf` (flash, then restore):
+no FX3 lockup in 60 two-channel bladeRF-cli tries (N6, R6, A), 23 rx2order tries (20 in the bad
+order) or the campaign (N6, `host-build-sc8`: 143 tests, the known 3 failures and 3 rxsched misses
+after host pauses). ctrl_threads first stopped at a 300 s limit and under the TX cap, both wrong:
+passing runs take about 550 to 650 s, and the cap fails the test's own gain checks. Job `xa9nakc`
+(flash, then restore), no cap with the TX ports on loads, 1200 s limit: N6 3 of 3 (547 to 551 s)
+and A 3 of 3 (641 to 653 s) pass, the FX3 answered after every run, and the whole flash was again
+identical to the 2026-11-18 inventory. `run-suite.sh`'s 300 s limit for ctrl_threads is too short
+for a pass (open item).
+
+Results: `results/nak-forkall-20261122-155030/`, `results/nak-ctrl-20261122-174223/`,
+`gapfix/res-*-1122-*`, `results/xa9r7t-20261122-202215/`, `results/xa5p7-20261122-211758/`.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
