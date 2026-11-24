@@ -2305,6 +2305,202 @@ for a pass (open item).
 Results: `results/nak-forkall-20261122-155030/`, `results/nak-ctrl-20261122-174223/`,
 `gapfix/res-*-1122-*`, `results/xa9r7t-20261122-202215/`, `results/xa5p7-20261122-211758/`.
 
+### 23. The xA5: soak, the stop hang, the FX3 NAK firmware, #940, RF, the first asynchronous stream (2026-11-22/23)
+
+**Setups** (the xA5 on the XPS 13, no antennas). A (night): the direct port, all four RF ports on
+50 ohm loads. B (receive): behind the USB-C adapter's hub; the USRP B200mini (on the laptop's own
+port) sends from TX/RX into the TOJOIN PS-2SM-2080 splitter, and each output reaches RX1 or RX2
+through 20 dB; TX1 and TX2 on loads. C (transmit): TX1 and TX2 through 20 dB each into the
+splitter's outputs, its common port into the B200mini's RX2; RX1, RX2 and the B200mini's TX/RX on
+loads; TX only with HWTEST_TX=1 under the TX cap. Images: A (Nuand v0.16.0), G (master with P27
+and P28), R7 (`pr/1r1t` v2, Nios II, with `pr/sc8-meta-tx`), N7 (`fork-all-v2`). Libraries:
+`host-build` (Nuand), `host-build-1r1tv2` (R7's), `host-build-allv2` (N7's, HWTEST_FIXES=1).
+The C programs of the stop-hang and first-stream tests are in `lib/` and `bin/cancel-stats.py`;
+they ran from `gapfix/stophang/` on the XPS under the older names that the logs show (each
+file's first comment names it).
+
+**Soak, R7 (setup A, night of 11-22).**
+- AD9361 BIST at 122.88 Msps in 1R1T mode, 4 segments of 25 min per channel, RX1 and RX2 in turn:
+  737.3 billion samples per channel, no errors.
+- Timed TX through the AD9361's loopback (`py-txsched2.py`, an earlier copy of
+  `bin/txburst-check.py`: a new open per run, TX gain at its minimum, every RX sample checked),
+  100 runs per case: 1R1T SC8 at 122.88 Msps on TX1 and on TX2, 1R1T SC16 at 61.44 Msps (ON) on
+  TX1 and on TX2, 2R2T two channels SC16 at 30.72 Msps: 499 of 500 pass. In the other run (SC8,
+  TX1) every burst checked right, then the RX disable hung (below).
+- `test_1r1t_txsched -k 2000` (SC8 AUTO 122.88 and SC16 ON 61.44 Msps, both channels): 2000 of
+  2000 bursts per run at one fixed delay (37 samples).
+
+**The stop hang (open item 19, upstream draft I36).** Twice the program hung forever in
+`bladerf_enable_module(RX, false)` after a complete RX read: libbladeRF logged "Timed out while
+stopping worker. Canceling thread." (`sync_worker_deinit()`: the RX worker did not stop within
+3 s, so it is cancelled), and then `async_deinit_stream()` waited forever for a stream state that
+only the cancelled worker sets. A gdb dump 30 s in: the main thread in that loop's 1 s sleep, the
+TX worker in `libusb_wait_for_event()`, the RX worker gone. The kernel log showed nothing but the
+usual reset at each open. Runs of `py-txsched2.py` (a new open each run, about 2.1 s each):
+
+| Run | Image, library | Case | Runs | Hangs |
+|---|---|---|---|---|
+| soak (setup A) | R7, `host-build-1r1tv2` | 1R1T SC8 122.88 Msps TX1 | 100 | 1 (run 49) |
+| hang-hunt A (setup A) | R7, `host-build-1r1tv2` | the same | 1500 | 1 (run 569) |
+| hang-hunt C (setup A) | G, `host-build` | 2R2T two channels SC16 30.72 Msps (the same USB byte rate) | 1500 | 0 |
+| dbghunt (setup A) | R7, debug build of `host-build-1r1tv2` | 1R1T SC8 122.88 Msps TX1 | 282 | 0 |
+
+Every "Timed out while stopping worker" ended in a hang. 2 in 1600 against 0 in 1500 does not
+tell the two setups apart (Fisher's exact test, one-sided p = 0.27). The stop path is Nuand's
+code in R7's library too: in `streaming/` and `backend/usb/`, `host-build-1r1tv2` differs from
+master only in `sync.c`'s TX burst flags (`pr/sc8-meta-tx`).
+
+In C (job `stophunt`, setup C, host tuning mode): `lib/stop-hang.c` repeats the end of a
+`py-txsched2.py` run: `bladerf_sync_config()` (RX: 256 buffers of 32,768 samples, 32 transfers,
+5 s time-out), the enable, with TX 16 timed bursts into the AD9361's loopback at the minimum TX
+gain, one timed RX read, 150 ms more streaming, then the RX disable, timed; one cycle per open
+(S1, S3) or ten (S2, S4). A stop still going after 1 s got two gdb snapshots 0.5 s apart
+(`gapfix/dbg/state.py`: the RX stream, its transfers and buffers), and a stop of 30 s was dumped
+and killed.
+
+| Arm | Image, library | Stream | Stops | Hangs | Stops over 1 s |
+|---|---|---|---|---|---|
+| S1 | R7, debug build of `host-build-1r1tv2` | 1R1T SC8 122.88 Msps, TX and RX | 2,870 | 0 | 0 |
+| S2 | the same | the same, RX only | 861 | 2 | 0 |
+| S3 | A, `host-build` | SC16 61.44 Msps, TX and RX | 1,736 | 0 | 4 (longest 2.08 s) |
+| S4 | the same | the same, RX only | 3,330 | 0 | 5 (longest 1.92 s) |
+
+At the first snapshot, in both hangs and in the five slow stops looked at (S3's four, S4's
+first), the RX worker was in `libusb_cancel_transfer()`: after the stop request,
+`lusb_stream_cb()` cancels every transfer in flight (`cancel_all_transfers()`). In the two hangs
+11 and 13 of the 31 transfers were cancelled at the first snapshot and 17 and 19 at the second,
+about 85 ms per call; 30 s after the stop, all were cancelled, 6 were never reaped
+(CANCEL_PENDING), and the stream state was still STREAM_SHUTTING_DOWN. A snapshot stops the
+process (ptrace) while the 3 s wait goes on: each pair of snapshots took 0.42 s.
+
+Without snapshots (job `hang2`, setup C, RX only, SC8_Q7_META at 122.88 Msps: A with OVERSAMPLE
+in 2R2T mode, R7 in 1R1T mode; ten cycles per open), with `lib/cancel-time.c` (LD_PRELOAD)
+timing every `libusb_cancel_transfer()` call and `bin/cancel-stats.py` grouping the calls of each
+stop:
+
+| Arm | Image, library | RX transfers | Stops | Hangs | Slow stops |
+|---|---|---|---|---|---|
+| H4 | A, `host-build` | 32 | 1,510 | 0 | 1: 2.90 s; 26 of its 31 calls about 112 ms each |
+| H1 | R7, debug build of `host-build-1r1tv2` | 32 | 1,130 | 0 | 0 |
+| H2 | the same | 16 | 1,500 | 0 | 0 |
+| H3 | the same | 8 | 750 | 0 | 1: 0.33 s; 3 of its 7 calls slow, at most 112 ms |
+
+The other calls took a median of 39 us; in H1 and H2 no call took more than 0.2 ms. The kernel
+log around the two slow stops showed only the reset at each open.
+
+**Fault injection** (job `inject1`, A and `host-build`, H4's stream). `lib/cancel-slow.c`
+(LD_PRELOAD, after `cancel-time.c`) made each `libusb_cancel_transfer()` call longer by a busy
+wait after the call:
+
+| RX transfers | Each call | Stops | Result |
+|---|---|---|---|
+| 32 | as it is | 3 | 5 ms each |
+| 32 | +112 ms | 2 | both hang after the warning (26 calls logged, 2.91 s): the main thread in `async_deinit_stream()`'s sleep, from `bladerf_enable_module()`, `_rfic_host_enable_module()`, `sync_deinit()` and `sync_worker_deinit()`; the RX worker gone |
+| 32 | +85 ms | 3 | 2.64 s each, no hang |
+| 16 | +112 ms | 3 | 1.68 s each, no hang |
+| 8 | +112 ms | 3 | 0.79 s each, no hang |
+
+So Nuand's libbladeRF hangs in the same way once a stop's cancel calls take more than 3 s, and
+slow cancel calls came with Nuand's code (S3, S4, H4) as with R7 (S2, H3). In S2 the calls went at
+about 85 ms, and 31 such calls take 2.64 s, which returns; with the 0.42 s of the snapshots added,
+those two stops passed 3 s, so the snapshots probably caused those two hangs. Why some calls take
+112 ms is not known.
+
+**Fewer transfers keep up** (jobs `tput1`, `tput2`, setup C; `lib/rx-gap-check.c`: the sync
+interface with stop-hang's buffers, RX_NOW reads of 32,768 samples for 30 s, host tuning mode).
+With SC8_Q7_META at 122.88 Msps, A and R7 received 122.87 to 122.89 Msps with 32, 16 and 8
+transfers. R7 had 0, 3 and 0 timestamp gaps; the 3 cancel out (no sample lost). A had none
+with 8 transfers. A with 32 and 16 transfers had 357,452 and 61,024 gaps of 1 or 2 samples each in
+`tput1` (open item 21); in `tput2`, 3 minutes later, A with 32 transfers had 3 gaps, which cancel
+out. SC16_Q11_META at 61.44 Msps (A, 16 and 32 transfers): no gaps.
+
+**The first asynchronous stream with metadata (open item 20, upstream draft I37).** With the
+asynchronous interface (`bladerf_init_stream()` with 16 buffers of 65,536 samples and 8 transfers,
+`bladerf_enable_module()`, then `bladerf_stream()`, the order that libbladeRF.h asks for) and
+SC8_Q7_META or SC16_Q11_META, the first RX stream after an image load in host tuning mode
+(libbladeRF's default) got no samples: all 8 transfers timed out after 1 s ("Transfer timed out
+for RX buffer"), `bladerf_stream()` returned BLADERF_ERR_TIMEOUT, and the next stream worked. The
+FPGA's config GPIO register (`bladerf_config_gpio_read()`) was 0x00000001 at the open and after
+the enable, and 0x00110001 (BLADERF_GPIO_TIMESTAMP and BLADERF_GPIO_8BIT_MODE) after
+`bladerf_stream()`, whose `perform_format_config()` sets the format after the enable; a later
+open found 0x00110001 already set. Setup C, RX1 only, 20 Msps, A and `host-build` unless named
+(jobs `asyncchk`, `asyncrerun`, `hang2` part B, `first2`, `fmt1`; `lib/async-check.c`,
+`lib/async-check2.c`, `lib/preset-format.c`, `lib/first-rx.c`):
+
+| Case | Result |
+|---|---|
+| async, metadata, host tuning mode, the first stream after a load (SC8 with OVERSAMPLE on and off, SC16; at once or 10 s after the load) | no samples, 15 of 15 |
+| the same, after another process's `bladerf_sync_config()` with SC8_Q7_META (no enable): 0x00110001 at the open | pass, 2 of 2 |
+| after a pass, another process's `bladerf_sync_config()` with SC16_Q11 (no metadata): 0x00000001 at the open | no samples, 2 of 2; the next stream passes, 2 of 2 |
+| async without metadata (SC16_Q11, SC8_Q7), the first stream after a load | pass, 3 of 3 |
+| async, metadata, FPGA tuning mode, the first stream after a load (the register changes after the enable here too) | pass, 4 of 4 |
+| sync interface (`bladerf_sync_config()` sets the format before the enable), metadata, the first stream after a load, host and FPGA tuning mode | pass, 8 of 8; the first read returned at once |
+| async, metadata, the first stream after a load, with one retry after the time-out (disable, a new stream, enable) | the retry passes, 2 of 2 |
+| N7 and `host-build-allv2`, R7 and `host-build-1r1tv2`, async SC8 with metadata, the first stream after a load | no samples, 3 of 3 |
+
+Not tested: TX, and the first stream after the FPGA loads itself from flash at power-up.
+
+**FX3 endpoint-NAK firmware on the xA5** (P15; flash, then restore; jobs `xa5nak` on 11-22 and
+`nak2` on 11-23, setup A). 60 two-channel bladeRF-cli tries (N7, R7 and A, 20 each): all complete,
+EP0 answered after each. 23 `rx2order` tries (3 in the early order, 20 in the late): all
+complete. ctrl_threads without the TX cap, 1200 s limit: N7 3 of 3 (545 to 549 s), A 3 of 3 (646
+to 647 s). The campaign (N7, `host-build-allv2`; run again on 11-23 because `xa5-nak.sh` had set
+HWTEST_FPGA=A9): 143 tests, 5 failed: `fmt_loop_sc16_x2_4M` (host, fpga), which fail with Nuand's
+firmware too, and three rxsched cases (`sched_sc16meta_x1-host`, `sched_sc16meta_x2-host`,
+`sched_sc8meta_x2-host`) with 5, 8 and 3 bursts too late to schedule, each after a host pause
+longer than the 59.7 ms the buffers last (13, 30 and 12 such pauses; file writes up to 158 ms). The
+baseline with Nuand's firmware an hour before (hang-hunt D): 3 failed, `sched_sc16meta_x2-host`
+with 1 late burst after 8 such pauses. The USB timings were the same in both runs: scheduled read
+105.1 ms, timestamp read 0.19 ms (means). Restore: Nuand's FX3 firmware 2.6.0, and all 8,388,608
+bytes of the flash identical to the 2026-11-18 inventory.
+
+**#940 (setup B).** RX at 50 Msps in SC8_Q7, OVERSAMPLE on and off, rate set with
+`bladerf_set_sample_rate()` and with `bladerf_set_rational_sample_rate()`: the FPGA counter for 5 s
+gave 49.997 to 49.999 Msps with no jumps, and the B200mini's tone at +3 MHz came out at 2.998 MHz,
+with A and Nuand's libbladeRF and with R7 and its library (OVERSAMPLE: AD9361 0x003 = 0xd4 with
+A, 0x54 with R7, which uses 1R1T mode for one channel). Issue #940 closed as "could not duplicate".
+The second comment's asynchronous interface (job `asyncchk`, setup C, `lib/async-check.c`): with
+SC8_Q7_META (OVERSAMPLE on and off) and SC16_Q11_META at 20 and 50 Msps, `num_samples` was 65,536
+in every callback, and the timestamps advanced 65,408 samples per buffer (16 or 32 messages of
+8,192 bytes, each with a 16-byte header), at the set rate (19.999 to 20.001 Msps at 20 Msps,
+49.988 to 50.000 Msps at 50 Msps). The halved `num_samples` (32,768) did not show either.
+
+**Receive at RF (setup B).**
+- `rf-check.py rx`, 7 points from 100 MHz to 5.8 GHz: N7 in host and FPGA tuning mode against A in
+  host tuning mode: tone level within 1.0 dB on RX1 and 1.8 dB on RX2.
+- Both channels at once (campaign phase twoch, HWTEST_2CH=rx), 5 points from 433 MHz to 5.8 GHz:
+  N7 10 of 10 (host and fpga), A 5 of 5 (host): lag 0, phase spread at most 0.6 degrees.
+- `oc_pulse_rx` (RX2, 122.88 Msps): N7 3 of 3 in each tuning mode; A 0 of 3 in each: 380,000 to
+  470,000 false pulses in 0.25 s, pulses 9 dB above the gaps (2R2T at 122.88 Msps, section 21).
+- R7 (`r1-rf.py`, RX1 tone at +3 MHz): 1R1T at 122.88 Msps -34.3 dBFS with the image at -39.9 dBc,
+  2R2T at 122.88 Msps -34.4 dBFS and -38.8 dBc with the default delay but +3.8 dBc with 0x006 =
+  0x70; AUTO: RX1 -34.4 dBFS and -39.8 dBc, RX2 -35.4 dBFS and -47.9 dBc.
+
+**Transmit at RF (setup C).**
+- R7 (`r1-txrf.py`): AUTO at 122.88 Msps (1R1T) on TX1 and TX2, in host and FPGA tuning mode: tone
+  -45.4 to -45.7 dBFS, image -35.2 to -36.0 dBc, carrier leak -33.9 to -35.3 dBc, no dropouts; 2R2T
+  at 61.44 Msps the same (-45.5 to -45.7 dBFS, image -34.9 to -35.7 dBc); 2R2T at 122.88 Msps: image
+  -0.3 to +3.6 dBc.
+- `rf-check.py tx`, 7 points: N7 in host and FPGA tuning mode against A: tone level within 0.9 dB
+  on TX1 and TX2.
+- Campaign phases formats (`fmt_txrf` only), oc (`oc_pulse_tx`, `oc_pulse_tx_meta`) and twoch
+  (HWTEST_2CH=tx): N7 34 of 34 in both tuning modes; A 24 of 28 (no `twoch_tx-fpga`): the four
+  `oc_pulse_tx*` tests at 122.88 Msps failed: in FPGA tuning mode in all 6 cases (false pulses; for
+  a 10 us PRI, a mean of about 7.2 us), in host tuning mode in 3 of 6 cases (1 or 2 PRIs off in
+  about 25,000). That is the 2R2T fault at 122.88 Msps (section 21), not I26: SC8 and SC8 with
+  metadata fail alike.
+
+Results: `results/xa5soak-20261122-230505/`, `results/hunt-20261123-033352/`,
+`results/dbghunt-20261123-060907/`, `results/nak-xa5-20261122-214004/`,
+`results/nak-xa5-20261123-062550/`, `results/xA5-N7-nakf/20261123-062617/`,
+`results/xA5-N7-base/20261123-052331/`, `results/inventory-20261123-070026/`,
+`results/xa5940-20261123-075710/`, `results/xa5rxrf-20261123-075707/`,
+`results/xa5txrf-20261123-085009/`, `results/stophunt-20261123-112733/`,
+`results/asyncchk-20261123-113717/`, `results/asyncrerun-20261123-200013/`,
+`results/hang2-20261123-201511/`, `results/first2-20261123-201944/`,
+`results/fmt1-20261123-213126/`, `results/inject1-20261123-213526/`,
+`results/tput1-20261123-213820/`, `results/tput2-20261123-214151/`.
+
 ## Evidence per change
 
 ### Branch `niosv`: Quartus 25.1 and Nios V for the bladeRF 2.0 micro
@@ -2688,17 +2884,42 @@ Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
     for 0.4 ms (section 21, the R2 soak): 145 phase losses, then clean. Long
     runs should avoid those minutes, or check losses there against the system
     log.
-18. Not yet covered in 1R1T mode (section 21): the xA5 with the fixed
-    images (R6, N6) and with every fork change, the TX level across the band
-    (only FC + 3 MHz), RF recordings to disk at 122.88 Msps, and the FX3 NAK
-    firmware with every fork change and ctrl_threads under it (needs the xA9
-    on a root port). A scheduled TX at 122.88 Msps needs `pr/sc8-meta-tx`
-    (libbladeRF) and 7c43dc3b (FPGA); the one-sample effect at a timed
-    burst's start in 2R2T (both sample sizes) is Nuand's and not changed.
+18. Not yet covered in 1R1T mode (sections 21 to 23): the TX level across the
+    band (only FC + 3 MHz) and RF recordings to disk at 122.88 Msps. A
+    scheduled TX at 122.88 Msps with SC8 needs `pr/sc8-meta-tx` (libbladeRF).
     The other revisions (wlan, adsb, foxhunt) build the same Qsys system but
     do not use 1R1T mode; only hostedxA5 and hostedxA9 were built. FPGA
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
     support would wrongly get AUTO.
+19. The RX disable can hang forever (section 23; upstream draft I36).
+    `sync_worker_deinit()` waits 3 s for the RX worker, then cancels it, and
+    `async_deinit_stream()` then waits for a stream state that only the
+    worker sets (code reading). The worker takes longer than 3 s when its
+    `libusb_cancel_transfer()` calls are slow: in rare stops, with Nuand's
+    code and with R7, many calls took about 112 ms each, and with 32
+    transfers a stop makes 31 calls. With every call made 112 ms longer,
+    Nuand's image and libbladeRF hung in 2 of 2 stops; with 16 or 8
+    transfers the stops took 1.68 or 0.79 s and returned, and 16 or 8
+    transfers still receive 122.88 Msps. Hangs without fault injection or a
+    debugger: 2 in 1,600 `py-txsched2.py` runs with R7 (TX and RX), none
+    with Nuand's code (its slowest stop: 2.90 s). Why the calls are slow is
+    not known; the kernel log shows nothing.
+20. The first asynchronous RX stream with metadata in host tuning mode gets
+    no samples when BLADERF_GPIO_TIMESTAMP is off at
+    `bladerf_enable_module()`: after each image load, and after a stream was
+    set up without metadata (section 23; upstream draft I37).
+    `bladerf_stream()` sets the format only after the enable. FPGA tuning
+    mode, the sync interface and formats without metadata pass, and so does
+    one retry after the time-out. Cause not found: in FPGA tuning mode the
+    bit also changes after the enable. Not tested: TX, and a power-up load
+    from flash.
+21. Once (job `tput1`, 2026-11-23 21:38), image A at 122.88 Msps
+    (SC8_Q7_META with OVERSAMPLE, sync RX) had 357,452 timestamp gaps of 1
+    or 2 samples in 30 s with 32 transfers and 61,024 with 16, then none with
+    8; 3 minutes later (`tput2`), 3 with 32 transfers, which cancel out. R7
+    had at most 3. Not investigated. With A, one channel at 122.88 Msps runs
+    the interface in 2R2T mode, which fails the BIST check on this board at
+    the default delay (section 21).
 
 ## How to repeat
 
