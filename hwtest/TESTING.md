@@ -2204,7 +2204,7 @@ path, as in every build): R6-A9 = hostedxA9 from 1r1t e641f302, Lite 23.1.1
 (setup -0.347 ns, hold +0.020 ns); N6-A9 = hostedxA9 from fork-all f2f8d5e1,
 Lite 25.1 (-0.284 ns, +0.062 ns); R6 = hostedxA5 from 1r1t (-0.563 ns, +0.008
 ns); N6 = hostedxA5 from fork-all (-0.116 ns, +0.075 ns). R6 and N6 are not
-run yet (the xA5 is on the MacBook Air). The xA9 runs (job `xa9p4b`, RX
+run yet (the xA5 is on the MacBook Air; N6's timed TX there: section 24). The xA9 runs (job `xa9p4b`, RX
 cabling, behind the hub, libbladeRF `host-build-sc8`, TX into the
 terminations with the TX cap):
 
@@ -2404,7 +2404,8 @@ So Nuand's libbladeRF hangs in the same way once a stop's cancel calls take more
 slow cancel calls came with Nuand's code (S3, S4, H4) as with R7 (S2, H3). In S2 the calls went at
 about 85 ms, and 31 such calls take 2.64 s, which returns; with the 0.42 s of the snapshots added,
 those two stops passed 3 s, so the snapshots probably caused those two hangs. Why some calls take
-112 ms is not known.
+112 ms is not known. Section 24 has the same symptom with Nuand's image and libbladeRF and no
+fault injection, in TX: MATLAB's `b.tx.stop()` while a timed burst was 60 s ahead.
 
 **Fewer transfers keep up** (jobs `tput1`, `tput2`, setup C; `lib/rx-gap-check.c`: the sync
 interface with stop-hang's buffers, RX_NOW reads of 32,768 samples for 30 s, host tuning mode).
@@ -2500,6 +2501,167 @@ Results: `results/xa5soak-20261122-230505/`, `results/hunt-20261123-033352/`,
 `results/hang2-20261123-201511/`, `results/first2-20261123-201944/`,
 `results/fmt1-20261123-213126/`, `results/inject1-20261123-213526/`,
 `results/tput1-20261123-213820/`, `results/tput2-20261123-214151/`.
+
+### 24. The xA5 on a MacBook Air: Python, bladeRF-cli and MATLAB (2026-11-22)
+
+**Setup.** The xA5 on a MacBook Air (Apple M4, macOS 27.2.1), all four RF ports on 50 ohm
+loads, no antennas. Python 3.14.7 in a venv (cffi 2.1.1, numpy 2.5.5); MATLAB R2025b Update 7
+('maca64'; the binding's thunk built with Xcode's clang). The harness's no-TX guard and TX cap
+are LD_PRELOAD libraries for Linux, and cffi calls pass them by anyway: on the Air the receive
+tests sent no TX command, and the TX tests set every TX gain to its minimum (-23 dB, read back
+with TX enabled) and checked the samples through the AD9361's internal loopback (RFIC BIST).
+FPGA images were only loaded into RAM, and each run ended with image A loaded. Host tuning mode
+unless noted. Images: A, R4 (`1r1t` 09953fe5, Nios II), N5 (`fork-all` 35cbda3d, Nios V;
+byte-identical to N4) and N6 (`fork-all` f2f8d5e1, with the 1R1T fifo_reader fixes c7ac1500 and
+7c43dc3b); section 21 has their builds. libbladeRF, bladeRF-cli and the test programs were built
+on the Air from local test branches, which are not on the fork:
+
+| Branch | Contents | Used for |
+|---|---|---|
+| `air-all` 14bd63f8 | `fork-all` 35cbda3d, the Python and bladeRF-cli 1R1T calls, `pr/python-feature` (P24) and Nuand's #1100 (the Python format values) | receive: Python, bladeRF-cli |
+| `air-ml` ca2c556b | `air-all` and the MATLAB changes: macOS support (`pr/matlab-macos`, now P25a and P25b), the format values (P22), OVERSAMPLE (P23) and the 1R1T calls | receive: MATLAB |
+| `air-ml-sc8` 4daf30b3 | `air-ml`, `fork-all-sc8` (with `pr/sc8-meta-tx`, P26) and two commits for `test_1r1t_txsched`: the TX gain at its minimum, and the Windows getopt.h only on Windows | timed TX |
+| `pr/1r1t` 2311f0c9 | the branch as pushed on 2026-11-22 (v1) | its own tests on macOS |
+| `test-batch4` 3521b3ee (46252383 before P32) | master's libbladeRF and the binding and test fixes P29 to P35, with P22, P24, P25 and #1100, which those tests need | the binding fixes, before and after |
+
+Git bundles of these branches, the test scripts and the logs were archived off the Air
+(`air-tests-20261122/`); they are not in this repository. IDs such as I22 and P22 are upstream
+drafts, not posted yet.
+
+**Receive (images A, R4 and N5; `air-all` and `air-ml`).**
+
+| Check | A | R4 | N5 |
+|---|---|---|---|
+| Python (`py-check.py`), host and FPGA tuning mode: rate, frequency, bandwidth and gain set and read back on RX1, RX2, TX1 and TX2 (TX disabled); the FPGA counter at 30.72 Msps with SC16_Q11 and SC8_Q7 on RX1 and RX2 (61,865,984 samples each); OVERSAMPLE at 122.88 Msps, AUTO, the counter for 10 s on RX1 and RX2 (1,228,931,072 samples each, 122.86 Msps) | all pass but the RX gain readback (below); no jump; 2R2T | the same; 1R1T, and OFF gives 2R2T | the same as R4 |
+| bladeRF-cli (`cli-check-mac.sh`, which uses libbladeRF's asynchronous interface): `set feature oversample` (the CLI then uses SC8_Q7), the counter at 122.88 Msps for 1 s on RX1 and RX2, every sample | pass; `print rfic_1r1t`: 2R2T | pass; 1R1T | pass; 1R1T |
+| MATLAB (`air_ml_smoke.m`): rate, frequency, bandwidth, gain (read with the channel on); the SC16_Q11_META counter at 30.72 Msps, 20 reads of 262,144 on RX1 and RX2; OVERSAMPLE: the SC8_Q7_META counter at 122.88 Msps, 4 reads of 1 Mi on RX1 and RX2; ON at 61.44 Msps (SC16) in a new session | pass; `rfic_1r1t` false; ON refused (-8), the mode stays AUTO | pass; `rfic_1r1t` true; ON: 1R1T, the counter clean | the same as R4 |
+
+- **Python's RX gain readback** failed on every image in both tuning modes: set 20 dB, read
+  60 dB. libbladeRF applies an RX gain set while the channel is disabled only when the channel is
+  enabled (bladeRF-cli prints that note). With the channel enabled (`gain-enabled.py`), RX1 and
+  RX2 read 20 and 35 dB in both tuning modes on all three images: the check's fault. The TX gains
+  read back as set.
+- **bladeRF-cli:** two captures (A RX2, N5 RX1) had two count breaks, at samples 1,015,808 and
+  1,081,344 (buffers 31 and 33 of 32,768 samples): the out-of-order buffer at a stream start
+  ([#1139]), inside the first 4 Mi samples that the check leaves out.
+- **MATLAB:** one overrun on RX1 in the stream's first 26 ms (the third read; [#1139]), none in
+  the later reads.
+
+The first runs, not counted above:
+- **The first Python run used Homebrew's libbladeRF** (2.6.0-git-fcf94233-dirty, Nuand's
+  2025.10): macOS's System Integrity Protection drops DYLD_LIBRARY_PATH when a protected program
+  (/usr/bin/perl, /bin/sh) starts a process, and cffi then loaded Homebrew's library without a
+  word. The run was repeated with ours. P25b's loader also searches the current folder for this
+  reason.
+- **The first MATLAB smoke runs failed two checks, both from the test.** (1) MATLAB's
+  `receive()` cannot keep up with 122.88 Msps, or with 61.44 Msps in SC16, between calls: after
+  the buffered reads every read came back short (an overrun). The final test reads 4 Mi samples,
+  which its 8 Mi samples of buffers hold. (2) ON at 61.44 Msps with SC16_Q11_META after
+  OVERSAMPLE in the same session overran on every 2,044-sample message, the timestamp stepping
+  about 2,717 samples per message; the same with Homebrew's libbladeRF on image A (Nuand's code)
+  and with ours in ON and in OFF, and a new open avoided it (open item 22). The final test runs ON
+  in a new session.
+
+MATLAB without our changes (image A; `air_ml_basic.m`: the SC16_Q11_META counter at 30.72 Msps,
+10 reads of 262,144 on RX1):
+- Nuand's binding with Homebrew's libbladeRF stops at the open: "Unsupported architecture:
+  maca64" (#845, P25a).
+- The macOS fix alone, with our libbladeRF: 640 breaks, 64 in every read (I22: the binding asks
+  for SC16_Q11_PACKED).
+- The macOS and format fixes, with Homebrew's libbladeRF: 0 breaks in one run; in the next, one
+  short read (an overrun) and 1,536 breaks, which this check also counts past a short read's end.
+- The runs that got past the open then stopped at `b.rx.mux = 'BASEBAND'`: "Invalid RX mux
+  mode: BASEBAND" (I32).
+
+**Timed TX bursts through C, Python and MATLAB (image N6, `air-ml-sc8`).** Numbered bursts of
+4,096 samples, queued with timestamps (BURST_START, then BURST_END with 2 zero samples; MATLAB:
+`transmit(samples, t, ts, true, true)`), then one scheduled RX read over all of them, TX1 into
+RX1 and TX2 into RX2: `test_1r1t_txsched` sends 100 bursts 10 ms apart from 32,768-sample
+buffers, `py-txsched.py` (an earlier copy of `bin/txburst-check.py`) 16 bursts 1 ms apart from
+8,192-sample buffers, `air_ml_txsched.m` 8 bursts 1 ms apart. Pass: every burst found, one delay,
+exact spacing, every burst sample right and, for Python and MATLAB, zeros between the bursts,
+which `test_1r1t_txsched` does not check.
+
+| Test | SC8 OVERSAMPLE AUTO 122.88 Msps (1R1T) | SC16 ON 61.44 Msps (1R1T) | SC16 2R2T (61.44 and 30.72 Msps) |
+|---|---|---|---|
+| C `test_1r1t_txsched` | pass on TX1 and TX2, delay 38 | pass on TX1 and TX2, delay 37 (the RX overran about 131 times between bursts) | the bursts after the first one sample early at 30.72 Msps; at 61.44 Msps delays 3 to 21 after RX overruns |
+| Python | pass on TX1 and TX2, delay 37 and 38 | fail on TX1 and TX2: a sample held in the gaps | fail on TX1 and TX2 at both rates: the same |
+| MATLAB, with `metad.flags` (I29) | pass on TX1 and TX2, delay 38 | fail on TX1 and TX2: the same | fail (TX1 at 61.44, TX2 at 30.72 Msps): the same |
+
+Python with SC8 AUTO at 61.44 Msps (1R1T): pass. With `air-ml`'s libbladeRF, which does not have
+P26, SC8 at 122.88 Msps: Python (TX1, TX2) and MATLAB (TX1) found none of the bursts at their
+timestamps, and the whole RX window held nonzero samples (I26).
+
+The held sample: after a burst's buffer has played, the TX sends the next burst's first sample
+and holds it until that burst's timestamp, and the burst's other samples follow on time, so a
+search finds every burst after the first one sample early. Seen with image A (2R2T, SC16 at
+30.72 Msps, 1 ms apart with 8,192-sample buffers and 10 ms apart with 32,768), with N6 in 2R2T
+(SC16, and SC8 at 61.44 Msps with OFF) and with N6 in 1R1T with SC16 (ON) and 8,192-sample
+buffers, 1 ms and 10 ms apart; not in one run of 1R1T SC16 10 ms apart with 32,768-sample
+buffers. 1R1T with SC8 (7c43dc3b) was clean in every pattern. This is I27: section 22 has its
+cause and the fix P27, and with 1R1T v2 every case passes.
+
+Before 4daf30b3, every `test_1r1t_txsched` run crashed on macOS (SIGSEGV, job
+`txsched-20261122-174920`). The tests put common/include/windows on the include path on every OS,
+and its getopt.h defines its own `optarg`; with that header only on Windows (4daf30b3), the
+options work (I33; P10 has the fix for its tests).
+
+**`pr/1r1t` v1 on macOS** (image N6, the branch's own libbladeRF and tests, 2311f0c9).
+`test_1r1t_state`: 31 of 31 checks. `test_1r1t_txsched` with SC16 ON at 61.44 Msps: 100 of 100
+bursts on TX1 and on TX2, delay 37 (the RX overran 131 and 132 times between bursts). With SC8
+AUTO at 122.88 Msps: 1 of 100 bursts found, 12.26 M samples before its timestamp, because the
+branch has no P26 (I26).
+
+**The binding fixes, before and after** (job `batch4`, image A, master's libbladeRF; before:
+master with the macOS fix, `test-b4-before`, or with P22 and P29 as well, `test-b4-mlB`; after:
+`test-batch4`):
+- MATLAB `transmit()` (I29, P29): before, every call stopped with "Unrecognized property 'flag'
+  for class 'lib.bladerf_metadata'" before any libbladeRF call. After, it reached
+  `bladerf_sync_tx()`, and 8 of 8 timed bursts arrived on TX1 and on TX2 with samples 1 to 4,095
+  right (SC16_Q11_META at 30.72 Msps; delay 20 for the first burst and 19 for the rest: I27).
+- MATLAB gain and AGC (I30, P30): before, with TX2 selected `b.tx.gain = -10` set TX1 to -10 dB
+  (TX2 stayed at -23 dB), and with RX2 selected `b.rx.agc = 'manual'` set RX1 to manual gain.
+  After, each acted on the selected channel only.
+- MATLAB `transmit()` timeout (I31, P31): a burst scheduled 60 s ahead at 5 Msps, then 2,097,152
+  zero samples, more than the 64 buffers of 16,384 samples hold. With a 2 ms timeout,
+  `transmit()` failed after 2.064 s before and after 0.035 s after, both times with
+  BLADERF_ERR_UNEXPECTED (-1) instead of BLADERF_ERR_TIMEOUT ([#1025]); a second call (20 ms)
+  failed at once with -3, so it measured nothing. Then `b.tx.stop()` logged "Timed out while
+  stopping worker. Canceling thread." and did not return, before and after: the two processes
+  were killed after 8 minutes and after 60 s, and the board answered normally afterward. This is
+  the symptom of the stop hang of section 23 (open item 19), here with Nuand's image and
+  libbladeRF, in TX, and with no fault injection; no stack was taken.
+- MATLAB RX mux (I32, P32): before, `b.rx.mux` read 'BASEBAND', but `b.rx.mux = 'BASEBAND'`
+  stopped with "Invalid RX mux mode: BASEBAND", while 'BASEBAND_LMS' worked and read back
+  'BASEBAND'. After, both names work.
+- `test_oversample -c 2` (I33, P33): before (master's build), SIGSEGV in `strtol_l` from
+  `atoi()` from `main()`, a NULL `optarg`; without options it ran. After: "Channel: 2", 1 s of
+  samples in 0.997 s.
+- Python tuning mode (I34, P34): before, `set_tuning_mode(1)` and `get_tuning_mode()` raised
+  NotImplementedError. After, it read Host, read back FPGA and then Host after setting each, and
+  RX1 tuned to 915 MHz in both modes.
+- Python timestamps (I35, P35): before, no `get_timestamp()` and no BLADERF_META_* values. After,
+  `get_timestamp(RX)` advanced 3.39 M samples over a 0.1 s sleep, and timed bursts with the new
+  call and values arrived 8 of 8 on TX1 and on TX2 with samples 1 to 4,095 right (delays 20 and
+  19: I27).
+- With RX disabled, the RX gain read back 60 dB after `b.rx.gain = 30`, before and after: the
+  readback while disabled, as in the Python check above.
+- In one Python session, a second channel after the first (disable, a new `sync_config()`,
+  enable) made `sync_tx()` raise TimePastError for a timestamp taken from `get_timestamp(TX)`; a
+  new session per channel works (open item 23).
+- From code reading only, not run: master's `bladeRF_XCVR.stop()` calls `transmit(0, 0,
+  obj.sob, obj.eob)` with its arguments in the wrong order.
+
+Not tested on the Air: TX at RF (only through the internal loopback), bladeRF-cli and MATLAB in
+FPGA tuning mode (the MATLAB binding cannot set it), two-channel streams (left out: the FX3
+lockup trigger in FPGA tuning mode, open item 10), R6, Intel macOS, and MATLAB on Linux or
+Windows.
+
+Results, archived from the Air's `air-results/` (since removed there): `20261122-104111/` (bladeRF-cli; its
+Python runs used Homebrew's library), `py-20261122-104554/`, `ml-20261122-105347/` to
+`ml-20261122-105831/` (the MATLAB baselines and the first smoke runs),
+`mlsmoke-20261122-110205/`, `txsched-20261122-174920/` (the crashes), `txsched-20261122-175055/`,
+`pr1r1t-20261122-180941/`, `batch4-20261122-184546/`.
 
 ## Evidence per change
 
@@ -2891,19 +3053,23 @@ Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
     do not use 1R1T mode; only hostedxA5 and hostedxA9 were built. FPGA
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
     support would wrongly get AUTO.
-19. The RX disable can hang forever (section 23; upstream draft I36).
-    `sync_worker_deinit()` waits 3 s for the RX worker, then cancels it, and
-    `async_deinit_stream()` then waits for a stream state that only the
-    worker sets (code reading). The worker takes longer than 3 s when its
-    `libusb_cancel_transfer()` calls are slow: in rare stops, with Nuand's
-    code and with R7, many calls took about 112 ms each, and with 32
+19. A disable can hang forever after libbladeRF logs "Timed out while
+    stopping worker. Canceling thread." (sections 23 and 24; upstream draft
+    I36). `sync_worker_deinit()` waits 3 s for the worker, then cancels it,
+    and `async_deinit_stream()` then waits for a stream state that only the
+    worker sets (code reading). In RX the worker takes longer than 3 s when
+    its `libusb_cancel_transfer()` calls are slow: in rare stops, with
+    Nuand's code and with R7, many calls took about 112 ms each, and with 32
     transfers a stop makes 31 calls. With every call made 112 ms longer,
     Nuand's image and libbladeRF hung in 2 of 2 stops; with 16 or 8
     transfers the stops took 1.68 or 0.79 s and returned, and 16 or 8
     transfers still receive 122.88 Msps. Hangs without fault injection or a
-    debugger: 2 in 1,600 `py-txsched2.py` runs with R7 (TX and RX), none
-    with Nuand's code (its slowest stop: 2.90 s). Why the calls are slow is
-    not known; the kernel log shows nothing.
+    debugger: the RX disable in 2 of 1,600 `py-txsched2.py` runs with R7
+    (TX and RX streams), and none in RX with Nuand's code (its slowest stop:
+    2.90 s); the TX disable in 2 of 2 MATLAB `b.tx.stop()` calls on macOS
+    with Nuand's image and libbladeRF, while a timed burst was 60 s ahead
+    (section 24). Why the cancel calls are slow is not known; the kernel log
+    shows nothing.
 20. The first asynchronous RX stream with metadata in host tuning mode gets
     no samples when BLADERF_GPIO_TIMESTAMP is off at
     `bladerf_enable_module()`: after each image load, and after a stream was
@@ -2920,6 +3086,18 @@ Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
     had at most 3. Not investigated. With A, one channel at 122.88 Msps runs
     the interface in 2R2T mode, which fails the BIST check on this board at
     the default delay (section 21).
+22. Leaving OVERSAMPLE within one session breaks later streams (section 24,
+    the MacBook Air): after a stream with OVERSAMPLE at 122.88 Msps, a
+    stream without it at 61.44 Msps (SC16_Q11_META) overran on every
+    2,044-sample message, the timestamp stepping about 2,717 samples per
+    message; the same with Homebrew's libbladeRF (Nuand's 2025.10) on image
+    A, and with ours with 1R1T ON and OFF. A new open avoids it. Maybe
+    upstream #1011 (RX fails after OVERSAMPLE is turned off at the highest
+    rate). Not investigated.
+23. Python: in one session, a second TX channel after the first (disable, a
+    new `sync_config()`, enable) made `sync_tx()` raise TimePastError for a
+    timestamp taken from `get_timestamp(TX)`; a new session per channel
+    works (section 24). Not investigated.
 
 ## How to repeat
 
