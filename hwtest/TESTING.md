@@ -2231,7 +2231,7 @@ apart unless noted) through the Python binding into the AD9361's internal loopba
 received sample, the gaps included; `test_1r1t_txsched` checks only the bursts, so it never saw
 what follows. TX gain at its minimum on every TX channel, all TX ports on 50 ohm loads. SC16 runs
 use Nuand's libbladeRF (`host-build`); SC8 runs use `host-build-sc8`, because Nuand's libbladeRF
-sends timed SC8_Q7_META bursts at once (`pr/sc8-meta-tx`, upstream draft I26).
+sends timed SC8_Q7_META bursts at once (`pr/sc8-meta-tx`, upstream issue [#1147]).
 
 **Two faults in Nuand's `fifo_reader.vhd`** (image A, v0.16.0, with Nuand's libbladeRF; xA9 and
 xA5 alike):
@@ -2241,22 +2241,23 @@ xA5 alike):
    stays high while META_LOAD runs at the end of a message, so a sample request there reads the
    next message's first sample, and bladerf-hosted.vhd's DAC register, which latches only valid
    samples, holds it until the burst's timestamp (the cause is from code reading and a cycle
-   model; the effect is measured). Upstream draft I27.
+   model; the effect is measured). Upstream issue [#1148].
 2. Two channels with SC16: bursts after the first leave 19,475 to 19,588 samples early (8192-sample
    TX buffers) and lose or cut samples; the offset changes by one sample per message (8 per burst
    with 8192-sample buffers, 16 with 32768). With two 16-bit channels the FIFO is read on every
    sample request; a read during META_LOAD or META_WAIT takes the next message's first word, and
-   META_WAIT starts the next message's count without it. Upstream draft I28.
+   META_WAIT starts the next message's count without it. Upstream issue [#1149].
 
 Continuous timed streams are not affected: the samples stay in order.
 
-**The fixes**, each one commit on master 35174c30: `pr/fifo-reader-early-sample` (P27): at the end
-of a message, samples go on through META_LOAD only when the next message follows without a gap, or
-is to be sent now; `pr/fifo-reader-msg-count` (P28): the reads made during META_LOAD and META_WAIT
-count toward the next message. They merge without a conflict (`test-fifo-reader-both`). Images
-built with Quartus Prime Lite 23.1.1: G (both), GA (P27 only), GB (P28 only).
+**The fixes**, each one commit on master 35174c30: `pr/fifo-reader-early-sample` ([#1164]): at the
+end of a message, samples go on through META_LOAD only when the next message follows without a
+gap, or is to be sent now; `pr/fifo-reader-msg-count` ([#1165]): the reads made during META_LOAD
+and META_WAIT count toward the next message. They merge without a conflict
+(`test-fifo-reader-both`). Images built with Quartus Prime Lite 23.1.1: G (both), GA ([#1164]
+only), GB ([#1165] only).
 
-| Case | A (Nuand) | GA (P27) | GB (P28) | G (both) |
+| Case | A (Nuand) | GA ([#1164]) | GB ([#1165]) | G (both) |
 |---|---|---|---|---|
 | 1 channel SC16, 30.72 and 61.44 Msps, TX1 and TX2 | 1 early, gaps held | pass | 1 early, gaps held | pass |
 | 1 channel SC8 (OVERSAMPLE, 2R2T), 61.44 Msps | 1 early, gaps held | pass | 1 early, gaps held | pass |
@@ -2272,17 +2273,17 @@ continuous or with 32768-sample TX buffers, overrun the RX (USB 3), with any ima
 at 15.36 Msps. A stream cut short leaves its last sample in the DAC register, and the next run sees
 it before its first burst.
 
-**1R1T v2.** `pr/1r1t` is rebuilt on P27 and P28 (force-pushed, 723b2e1f): its `fifo_reader`
-commit now makes the meta FSM count the FIFO's own read strobe, which in 1R1T mode advances the
-FIFO in the cycle of the request, so a message ends at the read that takes its last word. That
-replaces c7ac1500 (end 16-bit messages one read earlier) and 7c43dc3b (hold 8-bit samples at a
-burst's start). R7 (Nios II, this branch with `pr/sc8-meta-tx`) and N7 (`fork-all-v2`: Nios V,
-1R1T v2 and every fork fix, Quartus Prime Lite 25.1) on the xA9 and the xA5: `test_1r1t_state`,
-`test_1r1t_txsched` (SC8 AUTO 122.88 and SC16 ON 61.44 Msps, both channels), `test_1r1t_meta`,
-`test_1r1t_stream` and `txburst-check.py` (1R1T bursts with SC8 at 122.88 and 61.44 and SC16 at
-61.44 Msps on both channels; continuous 1R1T SC8 at 61.44 and SC16 at 30.72 Msps; 2R2T with one and
-two channels): 17 of 17 pass per board and image. Continuous 1R1T TX and RX at 122.88 Msps (SC8)
-or 61.44 Msps (SC16) together overrun the RX (USB 3).
+**1R1T v2.** `pr/1r1t` is rebuilt on [#1164] and [#1165] (force-pushed, 723b2e1f): its
+`fifo_reader` commit now makes the meta FSM count the FIFO's own read strobe, which in 1R1T mode
+advances the FIFO in the cycle of the request, so a message ends at the read that takes its last
+word. That replaces c7ac1500 (end 16-bit messages one read earlier) and 7c43dc3b (hold 8-bit
+samples at a burst's start). R7 (Nios II, this branch with `pr/sc8-meta-tx`) and N7 (`fork-all-v2`:
+Nios V, 1R1T v2 and every fork fix, Quartus Prime Lite 25.1) on the xA9 and the xA5:
+`test_1r1t_state`, `test_1r1t_txsched` (SC8 AUTO 122.88 and SC16 ON 61.44 Msps, both channels),
+`test_1r1t_meta`, `test_1r1t_stream` and `txburst-check.py` (1R1T bursts with SC8 at 122.88 and
+61.44 and SC16 at 61.44 Msps on both channels; continuous 1R1T SC8 at 61.44 and SC16 at 30.72 Msps;
+2R2T with one and two channels): 17 of 17 pass per board and image. Continuous 1R1T TX and RX at
+122.88 Msps (SC8) or 61.44 Msps (SC16) together overrun the RX (USB 3).
 
 **RX timing of the new builds.** Worst setup slack, all on the AD9361 RX LVDS capture: G -0.322 ns
 (xA5), +0.357 ns (xA9); R7 -1.076 ns (xA5), -0.528 ns (xA9); N7 -0.791 ns (xA5), -0.225 ns (xA9);
@@ -2312,12 +2313,12 @@ Results: `results/nak-forkall-20261122-155030/`, `results/nak-ctrl-20261122-1742
 port) sends from TX/RX into the TOJOIN PS-2SM-2080 splitter, and each output reaches RX1 or RX2
 through 20 dB; TX1 and TX2 on loads. C (transmit): TX1 and TX2 through 20 dB each into the
 splitter's outputs, its common port into the B200mini's RX2; RX1, RX2 and the B200mini's TX/RX on
-loads; TX only with HWTEST_TX=1 under the TX cap. Images: A (Nuand v0.16.0), G (master with P27
-and P28), R7 (`pr/1r1t` v2, Nios II, with `pr/sc8-meta-tx`), N7 (`fork-all-v2`). Libraries:
-`host-build` (Nuand), `host-build-1r1tv2` (R7's), `host-build-allv2` (N7's, HWTEST_FIXES=1).
-The C programs of the stop-hang and first-stream tests are in `lib/` and `bin/cancel-stats.py`;
-they ran from `gapfix/stophang/` on the XPS under the older names that the logs show (each
-file's first comment names it).
+loads; TX only with HWTEST_TX=1 under the TX cap. Images: A (Nuand v0.16.0), G (master with
+[#1164] and [#1165]), R7 (`pr/1r1t` v2, Nios II, with `pr/sc8-meta-tx`), N7 (`fork-all-v2`).
+Libraries: `host-build` (Nuand), `host-build-1r1tv2` (R7's), `host-build-allv2` (N7's,
+HWTEST_FIXES=1). The C programs of the stop-hang and first-stream tests are in `lib/` and
+`bin/cancel-stats.py`; they ran from `gapfix/stophang/` on the XPS under the older names that the
+logs show (each file's first comment names it).
 
 **Soak, R7 (setup A, night of 11-22).**
 - AD9361 BIST at 122.88 Msps in 1R1T mode, 4 segments of 25 min per channel, RX1 and RX2 in turn:
@@ -2330,7 +2331,7 @@ file's first comment names it).
 - `test_1r1t_txsched -k 2000` (SC8 AUTO 122.88 and SC16 ON 61.44 Msps, both channels): 2000 of
   2000 bursts per run at one fixed delay (37 samples).
 
-**The stop hang (open item 19, upstream draft I36).** Twice the program hung forever in
+**The stop hang (open item 19, upstream issue [#1157]).** Twice the program hung forever in
 `bladerf_enable_module(RX, false)` after a complete RX read: libbladeRF logged "Timed out while
 stopping worker. Canceling thread." (`sync_worker_deinit()`: the RX worker did not stop within
 3 s, so it is cancelled), and then `async_deinit_stream()` waited forever for a stream state that
@@ -2415,7 +2416,7 @@ with 8 transfers. A with 32 and 16 transfers had 357,452 and 61,024 gaps of 1 or
 `tput1` (open item 21); in `tput2`, 3 minutes later, A with 32 transfers had 3 gaps, which cancel
 out. SC16_Q11_META at 61.44 Msps (A, 16 and 32 transfers): no gaps.
 
-**The first asynchronous stream with metadata (open item 20, upstream draft I37).** With the
+**The first asynchronous stream with metadata (open item 20, upstream issue [#1158]).** With the
 asynchronous interface (`bladerf_init_stream()` with 16 buffers of 65,536 samples and 8 transfers,
 `bladerf_enable_module()`, then `bladerf_stream()`, the order that libbladeRF.h asks for) and
 SC8_Q7_META or SC16_Q11_META, the first RX stream after an image load in host tuning mode
@@ -2441,7 +2442,7 @@ open found 0x00110001 already set. Setup C, RX1 only, 20 Msps, A and `host-build
 
 Not tested: TX, and the first stream after the FPGA loads itself from flash at power-up.
 
-**FX3 endpoint-NAK firmware on the xA5** (P15; flash, then restore; jobs `xa5nak` on 11-22 and
+**FX3 endpoint-NAK firmware on the xA5** ([#1133]; flash, then restore; jobs `xa5nak` on 11-22 and
 `nak2` on 11-23, setup A). 60 two-channel bladeRF-cli tries (N7, R7 and A, 20 each): all complete,
 EP0 answered after each. 23 `rx2order` tries (3 in the early order, 20 in the late): all
 complete. ctrl_threads without the TX cap, 1200 s limit: N7 3 of 3 (545 to 549 s), A 3 of 3 (646
@@ -2488,7 +2489,7 @@ in every callback, and the timestamps advanced 65,408 samples per buffer (16 or 
   (HWTEST_2CH=tx): N7 34 of 34 in both tuning modes; A 24 of 28 (no `twoch_tx-fpga`): the four
   `oc_pulse_tx*` tests at 122.88 Msps failed: in FPGA tuning mode in all 6 cases (false pulses; for
   a 10 us PRI, a mean of about 7.2 us), in host tuning mode in 3 of 6 cases (1 or 2 PRIs off in
-  about 25,000). That is the 2R2T fault at 122.88 Msps (section 21), not I26: SC8 and SC8 with
+  about 25,000). That is the 2R2T fault at 122.88 Msps (section 21), not [#1147]: SC8 and SC8 with
   metadata fail alike.
 
 Results: `results/xa5soak-20261122-230505/`, `results/hunt-20261123-033352/`,
@@ -2518,15 +2519,15 @@ on the Air from local test branches, which are not on the fork:
 
 | Branch | Contents | Used for |
 |---|---|---|
-| `air-all` 14bd63f8 | `fork-all` 35cbda3d, the Python and bladeRF-cli 1R1T calls, `pr/python-feature` (P24) and Nuand's #1100 (the Python format values) | receive: Python, bladeRF-cli |
-| `air-ml` ca2c556b | `air-all` and the MATLAB changes: macOS support (`pr/matlab-macos`, now P25a and P25b), the format values (P22), OVERSAMPLE (P23) and the 1R1T calls | receive: MATLAB |
-| `air-ml-sc8` 4daf30b3 | `air-ml`, `fork-all-sc8` (with `pr/sc8-meta-tx`, P26) and two commits for `test_1r1t_txsched`: the TX gain at its minimum, and the Windows getopt.h only on Windows | timed TX |
+| `air-all` 14bd63f8 | `fork-all` 35cbda3d, the Python and bladeRF-cli 1R1T calls, `pr/python-feature` ([#1161]) and Nuand's #1100 (the Python format values) | receive: Python, bladeRF-cli |
+| `air-ml` ca2c556b | `air-all` and the MATLAB changes: macOS support (`pr/matlab-macos`, now [#1162] and [#1163]), the format values ([#1159]), OVERSAMPLE ([#1160]) and the 1R1T calls | receive: MATLAB |
+| `air-ml-sc8` 4daf30b3 | `air-ml`, `fork-all-sc8` (with `pr/sc8-meta-tx`, the change of [#1101]) and two commits for `test_1r1t_txsched`: the TX gain at its minimum, and the Windows getopt.h only on Windows | timed TX |
 | `pr/1r1t` 2311f0c9 | the branch as pushed on 2026-11-22 (v1) | its own tests on macOS |
-| `test-batch4` 3521b3ee (46252383 before P32) | master's libbladeRF and the binding and test fixes P29 to P35, with P22, P24, P25 and #1100, which those tests need | the binding fixes, before and after |
+| `test-batch4` 3521b3ee (46252383 before [#1170]) | master's libbladeRF and the binding and test fixes [#1167] to [#1173], with [#1159], [#1161], [#1162], [#1163] and #1100, which those tests need | the binding fixes, before and after |
 
 Git bundles of these branches, the test scripts and the logs were archived off the Air
-(`air-tests-20261122/`); they are not in this repository. IDs such as I22 and P22 are upstream
-drafts, not posted yet.
+(`air-tests-20261122/`); they are not in this repository. The upstream issues and pull requests
+are linked by their GitHub numbers.
 
 **Receive (images A, R4 and N5; `air-all` and `air-ml`).**
 
@@ -2551,8 +2552,8 @@ The first runs, not counted above:
 - **The first Python run used Homebrew's libbladeRF** (2.6.0-git-fcf94233-dirty, Nuand's
   2025.10): macOS's System Integrity Protection drops DYLD_LIBRARY_PATH when a protected program
   (/usr/bin/perl, /bin/sh) starts a process, and cffi then loaded Homebrew's library without a
-  word. The run was repeated with ours. P25b's loader also searches the current folder for this
-  reason.
+  word. The run was repeated with ours. [#1163]'s loader also searches the current folder for
+  this reason.
 - **The first MATLAB smoke runs failed two checks, both from the test.** (1) MATLAB's
   `receive()` cannot keep up with 122.88 Msps, or with 61.44 Msps in SC16, between calls: after
   the buffered reads every read came back short (an overrun). The final test reads 4 Mi samples,
@@ -2565,13 +2566,13 @@ The first runs, not counted above:
 MATLAB without our changes (image A; `air_ml_basic.m`: the SC16_Q11_META counter at 30.72 Msps,
 10 reads of 262,144 on RX1):
 - Nuand's binding with Homebrew's libbladeRF stops at the open: "Unsupported architecture:
-  maca64" (#845, P25a).
-- The macOS fix alone, with our libbladeRF: 640 breaks, 64 in every read (I22: the binding asks
-  for SC16_Q11_PACKED).
+  maca64" (#845, [#1162]).
+- The macOS fix alone, with our libbladeRF: 640 breaks, 64 in every read ([#1145]: the binding
+  asks for SC16_Q11_PACKED).
 - The macOS and format fixes, with Homebrew's libbladeRF: 0 breaks in one run; in the next, one
   short read (an overrun) and 1,536 breaks, which this check also counts past a short read's end.
 - The runs that got past the open then stopped at `b.rx.mux = 'BASEBAND'`: "Invalid RX mux
-  mode: BASEBAND" (I32).
+  mode: BASEBAND" ([#1153]).
 
 **Timed TX bursts through C, Python and MATLAB (image N6, `air-ml-sc8`).** Numbered bursts of
 4,096 samples, queued with timestamps (BURST_START, then BURST_END with 2 zero samples; MATLAB:
@@ -2586,11 +2587,11 @@ which `test_1r1t_txsched` does not check.
 |---|---|---|---|
 | C `test_1r1t_txsched` | pass on TX1 and TX2, delay 38 | pass on TX1 and TX2, delay 37 (the RX overran about 131 times between bursts) | the bursts after the first one sample early at 30.72 Msps; at 61.44 Msps delays 3 to 21 after RX overruns |
 | Python | pass on TX1 and TX2, delay 37 and 38 | fail on TX1 and TX2: a sample held in the gaps | fail on TX1 and TX2 at both rates: the same |
-| MATLAB, with `metad.flags` (I29) | pass on TX1 and TX2, delay 38 | fail on TX1 and TX2: the same | fail (TX1 at 61.44, TX2 at 30.72 Msps): the same |
+| MATLAB, with `metad.flags` ([#1150]) | pass on TX1 and TX2, delay 38 | fail on TX1 and TX2: the same | fail (TX1 at 61.44, TX2 at 30.72 Msps): the same |
 
 Python with SC8 AUTO at 61.44 Msps (1R1T): pass. With `air-ml`'s libbladeRF, which does not have
-P26, SC8 at 122.88 Msps: Python (TX1, TX2) and MATLAB (TX1) found none of the bursts at their
-timestamps, and the whole RX window held nonzero samples (I26).
+the change of [#1101], SC8 at 122.88 Msps: Python (TX1, TX2) and MATLAB (TX1) found none of the
+bursts at their timestamps, and the whole RX window held nonzero samples ([#1147]).
 
 The held sample: after a burst's buffer has played, the TX sends the next burst's first sample
 and holds it until that burst's timestamp, and the burst's other samples follow on time, so a
@@ -2598,32 +2599,33 @@ search finds every burst after the first one sample early. Seen with image A (2R
 30.72 Msps, 1 ms apart with 8,192-sample buffers and 10 ms apart with 32,768), with N6 in 2R2T
 (SC16, and SC8 at 61.44 Msps with OFF) and with N6 in 1R1T with SC16 (ON) and 8,192-sample
 buffers, 1 ms and 10 ms apart; not in one run of 1R1T SC16 10 ms apart with 32,768-sample
-buffers. 1R1T with SC8 (7c43dc3b) was clean in every pattern. This is I27: section 22 has its
-cause and the fix P27, and with 1R1T v2 every case passes.
+buffers. 1R1T with SC8 (7c43dc3b) was clean in every pattern. This is [#1148]: section 22 has
+its cause and the fix [#1164], and with 1R1T v2 every case passes.
 
 Before 4daf30b3, every `test_1r1t_txsched` run crashed on macOS (SIGSEGV, job
 `txsched-20261122-174920`). The tests put common/include/windows on the include path on every OS,
 and its getopt.h defines its own `optarg`; with that header only on Windows (4daf30b3), the
-options work (I33; P10 has the fix for its tests).
+options work ([#1154]; [#1166] has the fix for its tests).
 
 **`pr/1r1t` v1 on macOS** (image N6, the branch's own libbladeRF and tests, 2311f0c9).
 `test_1r1t_state`: 31 of 31 checks. `test_1r1t_txsched` with SC16 ON at 61.44 Msps: 100 of 100
 bursts on TX1 and on TX2, delay 37 (the RX overran 131 and 132 times between bursts). With SC8
 AUTO at 122.88 Msps: 1 of 100 bursts found, 12.26 M samples before its timestamp, because the
-branch has no P26 (I26).
+branch does not have the change of [#1101] ([#1147]).
 
 **The binding fixes, before and after** (job `batch4`, image A, master's libbladeRF; before:
-master with the macOS fix, `test-b4-before`, or with P22 and P29 as well, `test-b4-mlB`; after:
-`test-batch4`):
-- MATLAB `transmit()` (I29, P29): before, every call stopped with "Unrecognized property 'flag'
-  for class 'lib.bladerf_metadata'" before any libbladeRF call. After, it reached
+master with the macOS fix, `test-b4-before`, or with [#1159] and [#1167] as well,
+`test-b4-mlB`; after: `test-batch4`):
+- MATLAB `transmit()` ([#1150], [#1167]): before, every call stopped with "Unrecognized property
+  'flag' for class 'lib.bladerf_metadata'" before any libbladeRF call. After, it reached
   `bladerf_sync_tx()`, and 8 of 8 timed bursts arrived on TX1 and on TX2 with samples 1 to 4,095
-  right (SC16_Q11_META at 30.72 Msps; delay 20 for the first burst and 19 for the rest: I27).
-- MATLAB gain and AGC (I30, P30): before, with TX2 selected `b.tx.gain = -10` set TX1 to -10 dB
-  (TX2 stayed at -23 dB), and with RX2 selected `b.rx.agc = 'manual'` set RX1 to manual gain.
-  After, each acted on the selected channel only.
-- MATLAB `transmit()` timeout (I31, P31): a burst scheduled 60 s ahead at 5 Msps, then 2,097,152
-  zero samples, more than the 64 buffers of 16,384 samples hold. With a 2 ms timeout,
+  right (SC16_Q11_META at 30.72 Msps; delay 20 for the first burst and 19 for the rest:
+  [#1148]).
+- MATLAB gain and AGC ([#1151], [#1168]): before, with TX2 selected `b.tx.gain = -10` set TX1
+  to -10 dB (TX2 stayed at -23 dB), and with RX2 selected `b.rx.agc = 'manual'` set RX1 to
+  manual gain. After, each acted on the selected channel only.
+- MATLAB `transmit()` timeout ([#1152], [#1169]): a burst scheduled 60 s ahead at 5 Msps, then
+  2,097,152 zero samples, more than the 64 buffers of 16,384 samples hold. With a 2 ms timeout,
   `transmit()` failed after 2.064 s before and after 0.035 s after, both times with
   BLADERF_ERR_UNEXPECTED (-1) instead of BLADERF_ERR_TIMEOUT ([#1025]); a second call (20 ms)
   failed at once with -3, so it measured nothing. Then `b.tx.stop()` logged "Timed out while
@@ -2631,19 +2633,19 @@ master with the macOS fix, `test-b4-before`, or with P22 and P29 as well, `test-
   were killed after 8 minutes and after 60 s, and the board answered normally afterward. This is
   the symptom of the stop hang of section 23 (open item 19), here with Nuand's image and
   libbladeRF, in TX, and with no fault injection; no stack was taken.
-- MATLAB RX mux (I32, P32): before, `b.rx.mux` read 'BASEBAND', but `b.rx.mux = 'BASEBAND'`
-  stopped with "Invalid RX mux mode: BASEBAND", while 'BASEBAND_LMS' worked and read back
-  'BASEBAND'. After, both names work.
-- `test_oversample -c 2` (I33, P33): before (master's build), SIGSEGV in `strtol_l` from
-  `atoi()` from `main()`, a NULL `optarg`; without options it ran. After: "Channel: 2", 1 s of
-  samples in 0.997 s.
-- Python tuning mode (I34, P34): before, `set_tuning_mode(1)` and `get_tuning_mode()` raised
-  NotImplementedError. After, it read Host, read back FPGA and then Host after setting each, and
-  RX1 tuned to 915 MHz in both modes.
-- Python timestamps (I35, P35): before, no `get_timestamp()` and no BLADERF_META_* values. After,
-  `get_timestamp(RX)` advanced 3.39 M samples over a 0.1 s sleep, and timed bursts with the new
-  call and values arrived 8 of 8 on TX1 and on TX2 with samples 1 to 4,095 right (delays 20 and
-  19: I27).
+- MATLAB RX mux ([#1153], [#1170]): before, `b.rx.mux` read 'BASEBAND', but
+  `b.rx.mux = 'BASEBAND'` stopped with "Invalid RX mux mode: BASEBAND", while
+  'BASEBAND_LMS' worked and read back 'BASEBAND'. After, both names work.
+- `test_oversample -c 2` ([#1154], [#1171]): before (master's build), SIGSEGV in `strtol_l`
+  from `atoi()` from `main()`, a NULL `optarg`; without options it ran. After: "Channel: 2",
+  1 s of samples in 0.997 s.
+- Python tuning mode ([#1155], [#1172]): before, `set_tuning_mode(1)` and `get_tuning_mode()`
+  raised NotImplementedError. After, it read Host, read back FPGA and then Host after setting
+  each, and RX1 tuned to 915 MHz in both modes.
+- Python timestamps ([#1156], [#1173]): before, no `get_timestamp()` and no BLADERF_META_*
+  values. After, `get_timestamp(RX)` advanced 3.39 M samples over a 0.1 s sleep, and timed bursts
+  with the new call and values arrived 8 of 8 on TX1 and on TX2 with samples 1 to 4,095 right
+  (delays 20 and 19: [#1148]).
 - With RX disabled, the RX gain read back 60 dB after `b.rx.gain = 30`, before and after: the
   readback while disabled, as in the Python check above.
 - In one Python session, a second channel after the first (disable, a new `sync_config()`,
@@ -3054,18 +3056,18 @@ Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
     version 0.17.0 is a placeholder: a later Nuand v0.17.0 without 1R1T
     support would wrongly get AUTO.
 19. A disable can hang forever after libbladeRF logs "Timed out while
-    stopping worker. Canceling thread." (sections 23 and 24; upstream draft
-    I36). `sync_worker_deinit()` waits 3 s for the worker, then cancels it,
-    and `async_deinit_stream()` then waits for a stream state that only the
-    worker sets (code reading). In RX the worker takes longer than 3 s when
-    its `libusb_cancel_transfer()` calls are slow: in rare stops, with
+    stopping worker. Canceling thread." (sections 23 and 24; upstream issue
+    [#1157]). `sync_worker_deinit()` waits 3 s for the worker, then cancels
+    it, and `async_deinit_stream()` then waits for a stream state that only
+    the worker sets (code reading). In RX the worker takes longer than 3 s
+    when its `libusb_cancel_transfer()` calls are slow: in rare stops, with
     Nuand's code and with R7, many calls took about 112 ms each, and with 32
     transfers a stop makes 31 calls. With every call made 112 ms longer,
     Nuand's image and libbladeRF hung in 2 of 2 stops; with 16 or 8
     transfers the stops took 1.68 or 0.79 s and returned, and 16 or 8
     transfers still receive 122.88 Msps. Hangs without fault injection or a
-    debugger: the RX disable in 2 of 1,600 `py-txsched2.py` runs with R7
-    (TX and RX streams), and none in RX with Nuand's code (its slowest stop:
+    debugger: the RX disable in 2 of 1,600 `py-txsched2.py` runs with R7 (TX
+    and RX streams), and none in RX with Nuand's code (its slowest stop:
     2.90 s); the TX disable in 2 of 2 MATLAB `b.tx.stop()` calls on macOS
     with Nuand's image and libbladeRF, while a timed burst was 60 s ahead
     (section 24). Why the cancel calls are slow is not known; the kernel log
@@ -3073,7 +3075,7 @@ Local (2026-11-22), off master 35174c30; tested as `fork-all-sc8`
 20. The first asynchronous RX stream with metadata in host tuning mode gets
     no samples when BLADERF_GPIO_TIMESTAMP is off at
     `bladerf_enable_module()`: after each image load, and after a stream was
-    set up without metadata (section 23; upstream draft I37).
+    set up without metadata (section 23; upstream issue [#1158]).
     `bladerf_stream()` sets the format only after the enable. FPGA tuning
     mode, the sync interface and formats without metadata pass, and so does
     one retry after the time-out. Cause not found: in FPGA tuning mode the
@@ -3115,9 +3117,10 @@ On the test host, with the harness checked out at `~/workarea/hwtest`
 Add `HOST_BUILD=<fixes build> HWTEST_FIXES=1` to test with the libbladeRF
 fixes.
 
-<!-- Links to the upstream issues and pull requests (posted 2026-11-21) -->
+<!-- Links to the upstream issues and pull requests (posted 2026-11-21 and 2026-11-24) -->
 [#1025]: https://github.com/Nuand/bladeRF/issues/1025
 [#1060]: https://github.com/Nuand/bladeRF/pull/1060
+[#1101]: https://github.com/Nuand/bladeRF/pull/1101
 [#1108]: https://github.com/Nuand/bladeRF/issues/1108
 [#1109]: https://github.com/Nuand/bladeRF/issues/1109
 [#1117]: https://github.com/Nuand/bladeRF/issues/1117
@@ -3136,9 +3139,38 @@ fixes.
 [#1129]: https://github.com/Nuand/bladeRF/pull/1129
 [#1130]: https://github.com/Nuand/bladeRF/pull/1130
 [#1131]: https://github.com/Nuand/bladeRF/pull/1131
+[#1133]: https://github.com/Nuand/bladeRF/pull/1133
 [#1134]: https://github.com/Nuand/bladeRF/pull/1134
 [#1135]: https://github.com/Nuand/bladeRF/pull/1135
 [#1137]: https://github.com/Nuand/bladeRF/issues/1137
 [#1139]: https://github.com/Nuand/bladeRF/issues/1139
 [#1143]: https://github.com/Nuand/bladeRF/issues/1143
+[#1145]: https://github.com/Nuand/bladeRF/issues/1145
+[#1147]: https://github.com/Nuand/bladeRF/issues/1147
+[#1148]: https://github.com/Nuand/bladeRF/issues/1148
+[#1149]: https://github.com/Nuand/bladeRF/issues/1149
+[#1150]: https://github.com/Nuand/bladeRF/issues/1150
+[#1151]: https://github.com/Nuand/bladeRF/issues/1151
+[#1152]: https://github.com/Nuand/bladeRF/issues/1152
+[#1153]: https://github.com/Nuand/bladeRF/issues/1153
+[#1154]: https://github.com/Nuand/bladeRF/issues/1154
+[#1155]: https://github.com/Nuand/bladeRF/issues/1155
+[#1156]: https://github.com/Nuand/bladeRF/issues/1156
+[#1157]: https://github.com/Nuand/bladeRF/issues/1157
+[#1158]: https://github.com/Nuand/bladeRF/issues/1158
+[#1159]: https://github.com/Nuand/bladeRF/pull/1159
+[#1160]: https://github.com/Nuand/bladeRF/pull/1160
+[#1161]: https://github.com/Nuand/bladeRF/pull/1161
+[#1162]: https://github.com/Nuand/bladeRF/pull/1162
+[#1163]: https://github.com/Nuand/bladeRF/pull/1163
+[#1164]: https://github.com/Nuand/bladeRF/pull/1164
+[#1165]: https://github.com/Nuand/bladeRF/pull/1165
+[#1166]: https://github.com/Nuand/bladeRF/pull/1166
+[#1167]: https://github.com/Nuand/bladeRF/pull/1167
+[#1168]: https://github.com/Nuand/bladeRF/pull/1168
+[#1169]: https://github.com/Nuand/bladeRF/pull/1169
+[#1170]: https://github.com/Nuand/bladeRF/pull/1170
+[#1171]: https://github.com/Nuand/bladeRF/pull/1171
+[#1172]: https://github.com/Nuand/bladeRF/pull/1172
+[#1173]: https://github.com/Nuand/bladeRF/pull/1173
 [bladeRF-wiphy #16]: https://github.com/Nuand/bladeRF-wiphy/issues/16
